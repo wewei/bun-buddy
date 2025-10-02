@@ -1,3 +1,4 @@
 export { createServerCommands } from './server';
 export { createConfigCommands } from './config';
-export { createConnectCommand } from './connect';
+export { createListenCommand } from './listen';
+export { createSendCommand } from './send';

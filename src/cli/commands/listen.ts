@@ -3,19 +3,19 @@ import chalk from 'chalk';
 import { spinner } from '../utils';
 import { userConfigManager } from '../../config/userConfig';
 
-export function createConnectCommand() {
-  const connect = new Command('connect')
-    .argument('[endpointUrl]', 'Service endpoint URL (defaults to config)')
-    .description('Connect to service in interactive mode')
-    .action(async (endpointUrl?: string) => {
+export function createListenCommand() {
+  const listen = new Command('listen')
+    .option('-u, --url <url>', 'Service endpoint URL')
+    .description('Listen to SSE messages from the service')
+    .action(async (options) => {
       try {
-        let serviceUrl = endpointUrl;
+        let serviceUrl = options.url;
         if (!serviceUrl) {
           const userConfig = userConfigManager.loadConfig();
           serviceUrl = `http://${userConfig.server.host}:${userConfig.server.port}`;
         }
 
-        console.log(chalk.blue.bold('🔌 Connecting to Bun Buddy Service'));
+        console.log(chalk.blue.bold('👂 Listening to Bun Buddy Service'));
         console.log(chalk.cyan('URL:'), serviceUrl);
         console.log('');
 
@@ -33,11 +33,11 @@ export function createConnectCommand() {
           
           if (testResponse.ok && testResponse.headers.get('content-type')?.includes('text/event-stream')) {
             spin.succeed(chalk.green('Connected successfully!'));
-            console.log(chalk.gray('(Type messages and press Enter, Ctrl+C to exit)'));
+            console.log(chalk.gray('(Listening for messages... Press Ctrl+C to exit)'));
             console.log('');
 
-            // Start interactive mode
-            await startInteractiveMode(serviceUrl);
+            // Start listening mode
+            await startListeningMode(serviceUrl);
           } else {
             spin.fail(chalk.red('Service is not responding correctly'));
             console.log(chalk.yellow('Expected SSE endpoint, but got:'), testResponse.headers.get('content-type'));
@@ -55,17 +55,10 @@ export function createConnectCommand() {
       }
     });
 
-  return connect;
+  return listen;
 }
 
-async function startInteractiveMode(serviceUrl: string) {
-  const readline = await import('readline');
-  
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout
-  });
-
+async function startListeningMode(serviceUrl: string) {
   // Track connection state
   let isConnected = false;
   let eventSource: any = null;
@@ -76,15 +69,13 @@ async function startInteractiveMode(serviceUrl: string) {
       eventSource.close();
     }
     
-    // Establish SSE connection silently
-    
     // Import eventsource dynamically
     import('eventsource').then(({ EventSource }) => {
       eventSource = new EventSource(`${serviceUrl}/`);
       
       eventSource.onopen = () => {
         isConnected = true;
-        // Connection established silently
+        // Connection status will be shown via welcome message
       };
       
       eventSource.onmessage = (event: any) => {
@@ -107,21 +98,25 @@ async function startInteractiveMode(serviceUrl: string) {
       });
       
       eventSource.addEventListener('heartbeat', (event: any) => {
-        // Heartbeat received - connection is alive
-        // Don't print anything to keep output clean
+        // Heartbeat received - connection is alive (silent)
+        // Only show heartbeat in verbose mode
+        if (process.env.DEBUG) {
+          console.log(chalk.gray('💓 Heartbeat'));
+        }
       });
       
       eventSource.onerror = (error: any) => {
         isConnected = false;
         
         if (eventSource.readyState === EventSource.CONNECTING) {
-          // Reconnecting - no output needed
+          console.log(chalk.yellow('🔄 Reconnecting...'));
         } else {
-          console.error('Connection error:', error.message || 'Unknown error');
+          console.error(chalk.red('❌ Connection error:'), error.message || 'Unknown error');
           
           // Auto-reconnect after 3 seconds
           setTimeout(() => {
             if (!isConnected) {
+              console.log(chalk.blue('🔄 Attempting to reconnect...'));
               connectSSE();
             }
           }, 3000);
@@ -133,68 +128,92 @@ async function startInteractiveMode(serviceUrl: string) {
     });
   };
 
+  // Track streaming state
+  let streamingTrackingId: string | null = null;
+  let isFirstChunk = true;
+
   // Handle incoming SSE messages
   const handleSSEMessage = (data: any) => {
+    const timestamp = new Date().toLocaleTimeString();
+    
     switch (data.type) {
       case 'welcome':
-        // Welcome message - don't print to keep output clean
+        console.log(chalk.green(`[${timestamp}] 🎉`), data.message || 'Connected to service');
         break;
+        
+      case 'user_message':
+        const userDisplay = data.trackingId 
+          ? `👤 User [${data.trackingId.substring(0, 8)}]:`
+          : '👤 User:';
+        console.log(chalk.blue(`[${timestamp}] ${userDisplay}`), chalk.white(data.message));
+        break;
+        
+      case 'llm_chunk':
+        // Handle streaming LLM responses
+        if (streamingTrackingId !== data.trackingId) {
+          // New streaming session
+          streamingTrackingId = data.trackingId;
+          isFirstChunk = true;
+        }
+        
+        if (isFirstChunk) {
+          const assistantDisplay = data.trackingId 
+            ? `🤖 Assistant [${data.trackingId.substring(0, 8)}]: `
+            : '🤖 Assistant: ';
+          process.stdout.write(chalk.green(`[${timestamp}] ${assistantDisplay}`));
+          isFirstChunk = false;
+        }
+        
+        // Write chunk content directly to stdout for streaming effect
+        if (data.content) {
+          process.stdout.write(chalk.white(data.content));
+        }
+        break;
+        
+      case 'llm_complete':
+        // End the streaming line
+        if (streamingTrackingId === data.trackingId) {
+          console.log(); // New line to end the stream
+          streamingTrackingId = null;
+          isFirstChunk = true;
+        }
+        break;
+        
+      case 'llm_error':
+        if (streamingTrackingId) {
+          console.log(); // End current stream if any
+          streamingTrackingId = null;
+          isFirstChunk = true;
+        }
+        console.log(chalk.red(`[${timestamp}] ❌ LLM Error:`), data.error);
+        break;
+        
       case 'echo':
-        console.log(data.message);
+        console.log(chalk.blue(`[${timestamp}] 📢 Echo:`), chalk.white(data.message));
         break;
+        
       case 'heartbeat':
-        // Don't print heartbeats, just acknowledge connection is alive
+        // Heartbeat is handled silently, but can be enabled for debugging
+        // console.log(chalk.gray(`[${timestamp}] 💓`));
         break;
+        
       default:
-        console.log(JSON.stringify(data));
+        console.log(chalk.cyan(`[${timestamp}] 📨 Unknown:`), JSON.stringify(data, null, 2));
     }
   };
 
   // Start SSE connection
   connectSSE();
 
-  // Handle user input
-  rl.on('line', async (input) => {
-    const message = input.trim();
-    if (message) {
-      try {
-        const response = await fetch(`${serviceUrl}/`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ message })
-        });
-
-        if (!response.ok) {
-          console.error('HTTP Error:', response.status, response.statusText);
-        } else {
-          const data = await response.json() as { success: boolean; message?: string; data?: any };
-          if (!data.success) {
-            console.error('Failed to send:', data.message || 'Unknown error');
-          }
-          // Success case - no output, message will be echoed back via SSE
-        }
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        console.error('Network error:', errorMessage);
-      }
-    }
-  });
-
   // Handle cleanup on exit
-  rl.on('close', () => {
+  process.on('SIGINT', () => {
+    console.log(chalk.yellow('\n👋 Disconnecting...'));
     if (eventSource) {
       eventSource.close();
     }
     process.exit(0);
   });
 
-  // Handle Ctrl+C gracefully
-  process.on('SIGINT', () => {
-    if (eventSource) {
-      eventSource.close();
-    }
-    rl.close();
-  });
+  // Keep the process alive
+  process.stdin.resume();
 }

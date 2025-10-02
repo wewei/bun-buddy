@@ -1,11 +1,16 @@
 import { join } from 'path';
 import { homedir } from 'os';
 import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'fs';
+import { type Endpoint } from './index';
 
 export interface UserConfig {
   server: {
     host: string;
     port: number;
+  };
+  llm: {
+    endpoints: Record<string, Endpoint>;
+    current: string;
   };
 }
 
@@ -13,6 +18,21 @@ const DEFAULT_CONFIG: UserConfig = {
   server: {
     host: 'localhost',
     port: 3000
+  },
+  llm: {
+    endpoints: {
+      openai: {
+        url: 'https://api.openai.com/v1',
+        key: '',
+        model: 'gpt-4'
+      },
+      claude: {
+        url: 'https://api.anthropic.com/v1',
+        key: '',
+        model: 'claude-3-sonnet-20240229'
+      }
+    },
+    current: 'openai'
   }
 };
 

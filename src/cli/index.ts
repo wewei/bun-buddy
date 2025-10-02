@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { Command } from 'commander';
 import chalk from 'chalk';
-import { createServerCommands, createConfigCommands, createConnectCommand } from './commands/';
+import { createServerCommands, createConfigCommands, createListenCommand, createSendCommand } from './commands/';
 import config from '../config';
 
 const program = new Command();
@@ -17,8 +17,11 @@ program.addCommand(createServerCommands());
 // Add config management commands
 program.addCommand(createConfigCommands());
 
-// Add connect command
-program.addCommand(createConnectCommand());
+// Add listen command
+program.addCommand(createListenCommand());
+
+// Add send command
+program.addCommand(createSendCommand());
 
 // Help enhancement
 program.on('--help', () => {
@@ -34,8 +37,10 @@ program.on('--help', () => {
   console.log('  $ buddy config get server.host Get specific config value');
   console.log('  $ buddy config set server.port 8080  Set config value');
   console.log('');
-  console.log('  $ buddy connect                Connect to local service');
-  console.log('  $ buddy connect http://example.com  Connect to remote service');
+  console.log('  $ buddy listen                 Listen to SSE messages from service');
+  console.log('  $ buddy listen --url http://example.com  Listen from remote service');
+  console.log('  $ buddy send "hello"           Send a message to service');
+  console.log('  $ buddy send "hello" --url http://example.com  Send to remote service');
   console.log('');
   console.log(chalk.cyan('📋 Configuration keys:'));
   console.log('  server.host                    Service host (default: localhost)');
