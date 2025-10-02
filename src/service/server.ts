@@ -1,4 +1,5 @@
 import config from '../config';
+import { createChannel } from 'better-sse';
 
 interface ApiResponse<T = any> {
   success: boolean;
@@ -17,9 +18,8 @@ function createResponse<T>(success: boolean, data?: T, message?: string): ApiRes
   };
 }
 
-// Store for connected clients (for SSE implementation)
-const connectedClients = new Set<ReadableStreamDefaultController>();
-const activeConnections = new Set<any>();
+// Create a better-sse channel for broadcasting messages
+const sseChannel = createChannel();
 
 export async function createServer(host?: string, port?: number) {
   const serviceHost = host || process.env.SERVICE_HOST || config.service.host;
@@ -44,32 +44,25 @@ export async function createServer(host?: string, port?: number) {
             const message = body.message || body;
             console.log('📨 Received message:', message);
             
-            // Broadcast to all connected SSE clients
+            // Broadcast to all connected SSE clients using better-sse
             const broadcastData = {
               type: 'echo',
               message: message,
               timestamp: new Date().toISOString()
             };
             
-            connectedClients.forEach(controller => {
-              try {
-                const encoder = new TextEncoder();
-                const sseData = `data: ${JSON.stringify(broadcastData)}\n\n`;
-                controller.enqueue(encoder.encode(sseData));
-              } catch (error) {
-                console.log('📡 Broadcast error, removing client:', error);
-                // Remove dead clients
-                connectedClients.delete(controller);
-                activeConnections.delete(controller);
-              }
-            });
+            // Get client count before broadcasting
+            const clientCount = sseChannel.sessionCount;
+            
+            // Broadcast the message
+            sseChannel.broadcast(broadcastData, 'message');
             
             // Echo back response
             return new Response(
               JSON.stringify(createResponse(true, { 
                 echo: message,
-                broadcasted: connectedClients.size > 0,
-                clientCount: connectedClients.size
+                broadcasted: clientCount > 0,
+                clientCount: clientCount
               })),
               {
                 headers: { 'Content-Type': 'application/json' }
@@ -77,81 +70,58 @@ export async function createServer(host?: string, port?: number) {
             );
           });
         } else if (method === 'GET') {
-          // SSE endpoint for real-time communication
-          const headers = new Headers({
-            'Content-Type': 'text/event-stream',
-            'Cache-Control': 'no-cache',
-            'Connection': 'keep-alive',
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Headers': 'Cache-Control'
-          });
-
-          const encoder = new TextEncoder();
-          let heartbeatInterval: any = null;
-          let clientController: ReadableStreamDefaultController | null = null;
-
-          const cleanupClient = () => {
-            if (clientController) {
-              connectedClients.delete(clientController);
-              activeConnections.delete(clientController);
-              console.log(`📡 SSE Client cleaned up. Total clients: ${connectedClients.size}`);
-            }
-            if (heartbeatInterval) {
-              clearInterval(heartbeatInterval);
-              heartbeatInterval = null;
-            }
-          };
-
-          const stream = new ReadableStream({
-            start(controller) {
-              clientController = controller;
-              try {
-                // Send Welcome Event with proper SSE format
-                const welcomeEvent = `event: welcome\ndata: ${JSON.stringify({ 
+          // SSE endpoint using better-sse
+          return new Promise((resolve) => {
+            // Use better-sse to create the SSE session
+            import('better-sse').then(({ createResponse }) => {
+              const response = createResponse(request, (session) => {
+                console.log(`📡 SSE Client connected. Total clients: ${sseChannel.sessionCount + 1}`);
+                
+                // Register session with channel for broadcasting
+                sseChannel.register(session);
+                
+                // Send welcome message
+                session.push({
                   message: 'Welcome to Bun Buddy Debug Server',
                   timestamp: new Date().toISOString()
-                })}\n\n`;
-                controller.enqueue(encoder.encode(welcomeEvent));
+                }, 'welcome');
 
-                // Store client for broadcasting
-                connectedClients.add(controller);
-                activeConnections.add(controller);
-                console.log(`📡 SSE Client connected. Total clients: ${connectedClients.size}`);
-
-                // Send periodic heartbeat
-                heartbeatInterval = setInterval(() => {
+                // Send periodic heartbeat (better-sse already handles keep-alive, but we want custom heartbeat)
+                const heartbeatInterval = setInterval(() => {
                   try {
-                    const heartbeatData = `data: ${JSON.stringify({ 
-                      type: 'heartbeat', 
-                      timestamp: new Date().toISOString() 
-                    })}\n\n`;
-                    controller.enqueue(encoder.encode(heartbeatData));
+                    if (session.isConnected) {
+                      session.push({ 
+                        type: 'heartbeat', 
+                        timestamp: new Date().toISOString() 
+                      }, 'heartbeat');
+                    } else {
+                      clearInterval(heartbeatInterval);
+                    }
                   } catch (error) {
-                    console.log(`📡 Heartbeat failed, cleaning up client`);
-                    cleanupClient();
+                    console.log('📡 Heartbeat failed, clearing interval');
+                    clearInterval(heartbeatInterval);
                   }
                 }, 30000);
 
-              } catch (error) {
-                console.log('📡 SSE Start error:', error);
-                cleanupClient();
-              }
-            },
-            
-            cancel() {
-              // This is called when the client cancels the stream
-              console.log(`📡 SSE Client cancelled connection`);
-              cleanupClient();
-            }
-          });
+                // Handle session events
+                session.on('disconnected', () => {
+                  console.log(`📡 SSE Client disconnected. Total clients: ${sseChannel.sessionCount}`);
+                  clearInterval(heartbeatInterval);
+                });
+              });
 
-          // Handle connection close
-          request.signal?.addEventListener('abort', () => {
-            console.log(`📡 SSE Client aborted connection`);
-            cleanupClient();
+              resolve(response);
+            }).catch((error) => {
+              console.error('📡 Failed to import better-sse:', error);
+              resolve(new Response(
+                JSON.stringify(createResponse(false, null, 'SSE not available')),
+                {
+                  status: 500,
+                  headers: { 'Content-Type': 'application/json' }
+                }
+              ));
+            });
           });
-
-          return new Response(stream, { headers });
         }
       }
 

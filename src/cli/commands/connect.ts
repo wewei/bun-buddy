@@ -33,8 +33,7 @@ export function createConnectCommand() {
           
           if (testResponse.ok && testResponse.headers.get('content-type')?.includes('text/event-stream')) {
             spin.succeed(chalk.green('Connected successfully!'));
-            console.log(chalk.yellow('Interactive mode - Type your messages and press Enter:'));
-            console.log(chalk.gray('(Press Ctrl+C to exit)'));
+            console.log(chalk.gray('(Type messages and press Enter, Ctrl+C to exit)'));
             console.log('');
 
             // Start interactive mode
@@ -64,144 +63,95 @@ async function startInteractiveMode(serviceUrl: string) {
   
   const rl = readline.createInterface({
     input: process.stdin,
-    output: process.stdout,
-    prompt: chalk.cyan('> ')
+    output: process.stdout
   });
 
   // Track connection state
   let isConnected = false;
-  let sseController: AbortController | null = null;
+  let eventSource: any = null;
 
-  // Start SSE connection for receiving messages
+  // Start SSE connection using eventsource package
   const connectSSE = () => {
-    if (sseController) {
-      sseController.abort();
+    if (eventSource) {
+      eventSource.close();
     }
     
-    sseController = new AbortController();
+    // Establish SSE connection silently
     
-    console.log(chalk.gray('📡 Establishing SSE connection...'));
-    
-    fetch(`${serviceUrl}/`, {
-      method: 'GET',
-      headers: {
-        'Accept': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive'
-      },
-      signal: sseController.signal
-    })
-    .then(async (response) => {
-      if (!response.ok) {
-        throw new Error(`SSE connection failed: ${response.status} ${response.statusText}`);
-      }
-
-      if (!response.body) {
-        throw new Error('No response body for SSE stream');
-      }
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      isConnected = true;
-      console.log(chalk.green('📡 SSE connection established'));
-
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          
-          if (done) {
-            console.log(chalk.yellow('📡 SSE connection closed by server'));
-            isConnected = false;
-            break;
-          }
-
-          // Accumulate chunks and process complete messages
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          
-          // Keep the last incomplete line in buffer
-          buffer = lines.pop() || '';
-          
-          for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              try {
-                const jsonData = line.substring(6).trim();
-                if (jsonData) {
-                  const data = JSON.parse(jsonData);
-                  handleSSEMessage(data);
-                }
-              } catch (error) {
-                console.log(chalk.gray('📡 Raw data:'), line.substring(6));
-              }
-            } else if (line.startsWith('event: ')) {
-              const eventType = line.substring(7).trim();
-              if (eventType) {
-                console.log(chalk.blue('📡 Event:'), eventType);
-              }
-            }
-          }
-        }
-      } catch (error) {
-        if (error instanceof Error && error.name !== 'AbortError') {
-          console.log(chalk.red('📡 SSE read error:'), error.message);
-        }
-        isConnected = false;
-      } finally {
+    // Import eventsource dynamically
+    import('eventsource').then(({ EventSource }) => {
+      eventSource = new EventSource(`${serviceUrl}/`);
+      
+      eventSource.onopen = () => {
+        isConnected = true;
+        // Connection established silently
+      };
+      
+      eventSource.onmessage = (event: any) => {
         try {
-          reader.releaseLock();
-        } catch {}
-      }
-    })
-    .catch((error) => {
-      if (error instanceof Error && error.name !== 'AbortError') {
-        console.log(chalk.red('📡 SSE connection error:'), error.message);
+          const data = JSON.parse(event.data);
+          handleSSEMessage(data);
+        } catch (error) {
+          console.log(chalk.gray('📡 Raw data:'), event.data);
+        }
+      };
+      
+      // Handle specific event types
+      eventSource.addEventListener('welcome', (event: any) => {
+        try {
+          const data = JSON.parse(event.data);
+          handleSSEMessage({ ...data, type: 'welcome' });
+        } catch (error) {
+          console.log(chalk.green('📡 Welcome:'), event.data);
+        }
+      });
+      
+      eventSource.addEventListener('heartbeat', (event: any) => {
+        // Heartbeat received - connection is alive
+        // Don't print anything to keep output clean
+      });
+      
+      eventSource.onerror = (error: any) => {
         isConnected = false;
         
-        // Attempt to reconnect after 3 seconds
-        console.log(chalk.yellow('📡 Will retry connection in 3 seconds...'));
-        setTimeout(() => {
-          if (!isConnected) {
-            console.log(chalk.yellow('📡 Attempting to reconnect SSE...'));
-            connectSSE();
-          }
-        }, 3000);
-      }
+        if (eventSource.readyState === EventSource.CONNECTING) {
+          // Reconnecting - no output needed
+        } else {
+          console.error('Connection error:', error.message || 'Unknown error');
+          
+          // Auto-reconnect after 3 seconds
+          setTimeout(() => {
+            if (!isConnected) {
+              connectSSE();
+            }
+          }, 3000);
+        }
+      };
+      
+    }).catch((error) => {
+      console.log(chalk.red('📡 Failed to load eventsource:'), error.message);
     });
   };
 
   // Handle incoming SSE messages
   const handleSSEMessage = (data: any) => {
-    // Clear current line and move cursor to beginning
-    process.stdout.write('\r\x1b[K');
-    
     switch (data.type) {
       case 'welcome':
-        console.log(chalk.green('📡 Server:'), data.message);
+        // Welcome message - don't print to keep output clean
         break;
       case 'echo':
-        console.log(chalk.magenta('📨 Echo:'), data.message);
-        if (data.timestamp) {
-          console.log(chalk.gray('   Time:'), new Date(data.timestamp).toLocaleTimeString());
-        }
+        console.log(data.message);
         break;
       case 'heartbeat':
         // Don't print heartbeats, just acknowledge connection is alive
         break;
       default:
-        console.log(chalk.cyan('📡 Message:'), JSON.stringify(data));
+        console.log(JSON.stringify(data));
     }
-    
-    // Re-display the prompt
-    rl.prompt();
   };
 
   // Start SSE connection
   connectSSE();
-
-  // Display initial prompt
-  rl.prompt();
 
   // Handle user input
   rl.on('line', async (input) => {
@@ -217,40 +167,33 @@ async function startInteractiveMode(serviceUrl: string) {
         });
 
         if (!response.ok) {
-          console.log(chalk.red('❌ HTTP Error:'), response.status, response.statusText);
+          console.error('HTTP Error:', response.status, response.statusText);
         } else {
           const data = await response.json() as { success: boolean; message?: string; data?: any };
-          if (data.success) {
-            console.log(chalk.blue('✅ Sent:'), message);
-            if (data.data?.clientCount !== undefined) {
-              console.log(chalk.gray('   Connected clients:'), data.data.clientCount);
-            }
-          } else {
-            console.log(chalk.red('❌ Failed to send:'), data.message || 'Unknown error');
+          if (!data.success) {
+            console.error('Failed to send:', data.message || 'Unknown error');
           }
+          // Success case - no output, message will be echoed back via SSE
         }
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        console.log(chalk.red('❌ Network error:'), errorMessage);
+        console.error('Network error:', errorMessage);
       }
     }
-    rl.prompt();
   });
 
   // Handle cleanup on exit
   rl.on('close', () => {
-    console.log(chalk.yellow('\n📡 Disconnecting from service...'));
-    if (sseController) {
-      sseController.abort();
+    if (eventSource) {
+      eventSource.close();
     }
     process.exit(0);
   });
 
   // Handle Ctrl+C gracefully
   process.on('SIGINT', () => {
-    console.log(chalk.yellow('\n📡 Received interrupt signal, disconnecting...'));
-    if (sseController) {
-      sseController.abort();
+    if (eventSource) {
+      eventSource.close();
     }
     rl.close();
   });
