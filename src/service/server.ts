@@ -53,10 +53,14 @@ export async function createServer(host?: string, port?: number) {
             
             connectedClients.forEach(controller => {
               try {
-                controller.enqueue(`data: ${JSON.stringify(broadcastData)}\n\n`);
+                const encoder = new TextEncoder();
+                const sseData = `data: ${JSON.stringify(broadcastData)}\n\n`;
+                controller.enqueue(encoder.encode(sseData));
               } catch (error) {
+                console.log('📡 Broadcast error, removing client:', error);
                 // Remove dead clients
                 connectedClients.delete(controller);
+                activeConnections.delete(controller);
               }
             });
             
@@ -82,49 +86,69 @@ export async function createServer(host?: string, port?: number) {
             'Access-Control-Allow-Headers': 'Cache-Control'
           });
 
+          const encoder = new TextEncoder();
+          let heartbeatInterval: any = null;
+          let clientController: ReadableStreamDefaultController | null = null;
+
+          const cleanupClient = () => {
+            if (clientController) {
+              connectedClients.delete(clientController);
+              activeConnections.delete(clientController);
+              console.log(`📡 SSE Client cleaned up. Total clients: ${connectedClients.size}`);
+            }
+            if (heartbeatInterval) {
+              clearInterval(heartbeatInterval);
+              heartbeatInterval = null;
+            }
+          };
+
           const stream = new ReadableStream({
             start(controller) {
-              // Send Welcome Event
-              controller.enqueue(`event: welcome\ndata: ${JSON.stringify({ 
-                message: 'Welcome to Bun Buddy Debug Server',
-                timestamp: new Date().toISOString()
-              })}\n\n`);
+              clientController = controller;
+              try {
+                // Send Welcome Event with proper SSE format
+                const welcomeEvent = `event: welcome\ndata: ${JSON.stringify({ 
+                  message: 'Welcome to Bun Buddy Debug Server',
+                  timestamp: new Date().toISOString()
+                })}\n\n`;
+                controller.enqueue(encoder.encode(welcomeEvent));
 
-              // Store client for broadcasting
-              connectedClients.add(controller);
-              activeConnections.add(controller);
-              console.log(`📡 SSE Client connected. Total clients: ${connectedClients.size}`);
+                // Store client for broadcasting
+                connectedClients.add(controller);
+                activeConnections.add(controller);
+                console.log(`📡 SSE Client connected. Total clients: ${connectedClients.size}`);
 
-              // Send periodic heartbeat
-              const heartbeat = setInterval(() => {
-                try {
-                  controller.enqueue(`data: ${JSON.stringify({ 
-                    type: 'heartbeat', 
-                    timestamp: new Date().toISOString() 
-                  })}\n\n`);
-                } catch (error) {
-                  console.log(`📡 Heartbeat failed, cleaning up client`);
-                  clearInterval(heartbeat);
-                  connectedClients.delete(controller);
-                }
-              }, 30000);
+                // Send periodic heartbeat
+                heartbeatInterval = setInterval(() => {
+                  try {
+                    const heartbeatData = `data: ${JSON.stringify({ 
+                      type: 'heartbeat', 
+                      timestamp: new Date().toISOString() 
+                    })}\n\n`;
+                    controller.enqueue(encoder.encode(heartbeatData));
+                  } catch (error) {
+                    console.log(`📡 Heartbeat failed, cleaning up client`);
+                    cleanupClient();
+                  }
+                }, 30000);
 
-              // Cleanup on close
-              request.signal?.addEventListener('abort', () => {
-                clearInterval(heartbeat);
-                connectedClients.delete(controller);
-                activeConnections.delete(controller);
-                console.log(`📡 SSE Client disconnected. Total clients: ${connectedClients.size}`);
-                try {
-                  controller.close();
-                } catch {}
-              });
+              } catch (error) {
+                console.log('📡 SSE Start error:', error);
+                cleanupClient();
+              }
             },
             
             cancel() {
               // This is called when the client cancels the stream
               console.log(`📡 SSE Client cancelled connection`);
+              cleanupClient();
             }
+          });
+
+          // Handle connection close
+          request.signal?.addEventListener('abort', () => {
+            console.log(`📡 SSE Client aborted connection`);
+            cleanupClient();
           });
 
           return new Response(stream, { headers });
