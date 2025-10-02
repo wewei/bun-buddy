@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { Command } from 'commander';
 import chalk from 'chalk';
-import { createServerCommands, createConfigCommands, createConnectCommand } from './commands';
+import { createServerCommands, createConfigCommands, createConnectCommand } from './commands/';
 import config from '../config';
 
 const program = new Command();
