@@ -15,7 +15,7 @@ const config: Config = {
     host: process.env.HOST || 'localhost'
   },
   cli: {
-    name: 'bun-buddy',
+    name: 'buddy',
     version: '1.0.0'
   }
 };

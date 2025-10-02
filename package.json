@@ -4,13 +4,13 @@
   "type": "module",
   "private": true,
   "bin": {
-    "bun-buddy": "./cli.ts"
+    "buddy": "./cli.ts"
   },
   "scripts": {
     "start": "bun run index.ts",
     "dev": "bun --watch index.ts",
     "service": "bun run src/service/index.ts",
-    "cli": "bun run src/cli/simple.ts"
+    "cli": "bun run cli.ts"
   },
   "dependencies": {
     "commander": "^11.1.0",

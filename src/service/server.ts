@@ -7,7 +7,7 @@ interface ApiResponse<T = any> {
   timestamp: string;
 }
 
-// Utili  // Server is now running and will keep the process alivection to create API responses
+// Utility function to create API responses
 function createResponse<T>(success: boolean, data?: T, message?: string): ApiResponse<T> {
   return {
     success,
@@ -17,122 +17,105 @@ function createResponse<T>(success: boolean, data?: T, message?: string): ApiRes
   };
 }
 
-// Sample data for demonstration
-const dummyUsers = [
-  { id: 1, name: 'Alice', email: 'alice@example.com' },
-  { id: 2, name: 'Bob', email: 'bob@example.com' },
-  { id: 3, name: 'Charlie', email: 'charlie@example.com' }
-];
+// Store for connected clients (for SSE implementation)
+const connectedClients = new Set<ReadableStreamDefaultController>();
 
-export async function createServer() {
-  console.log(`🚀 Server running at http://${config.service.host}:${config.service.port}`);
-  console.log(`📋 Health check: http://${config.service.host}:${config.service.port}/health`);
-  console.log(`📚 API docs: http://${config.service.host}:${config.service.port}/api/info`);
+export async function createServer(host?: string, port?: number) {
+  const serviceHost = host || process.env.SERVICE_HOST || config.service.host;
+  const servicePort = port || parseInt(process.env.SERVICE_PORT || '') || config.service.port;
+
+  console.log(`🚀 Server running at http://${serviceHost}:${servicePort}`);
+  console.log(`📋 SSE endpoint: http://${serviceHost}:${servicePort}/`);
 
   const server = Bun.serve({
-    port: config.service.port,
-    hostname: config.service.host,
+    port: servicePort,
+    hostname: serviceHost,
 
     fetch(request: Request): Response | Promise<Response> {
       const url = new URL(request.url);
       const method = request.method;
 
-      // Health check endpoint
-      if (url.pathname === '/health' && method === 'GET') {
+      // Shutdown endpoint for CLI stop command
+      if (url.pathname === '/shutdown' && method === 'POST') {
+        // Send response first
+        setTimeout(() => {
+          console.log('\n🛑 Shutting down server via API...');
+          server.stop();
+          process.exit(0);
+        }, 100);
+
         return new Response(
-          JSON.stringify(createResponse(true, { status: 'healthy', uptime: process.uptime() })),
+          JSON.stringify(createResponse(true, null, 'Server shutting down')),
           {
             headers: { 'Content-Type': 'application/json' }
           }
         );
       }
 
-      // API info endpoint
-      if (url.pathname === '/api/info' && method === 'GET') {
-        return new Response(
-          JSON.stringify(createResponse(true, {
-            name: 'Bun Buddy API',
-            version: '1.0.0',
-            endpoints: [
-              'GET /health - Health check',
-              'GET /api/info - API information',
-              'GET /api/users - Get all users',
-              'GET /api/users/:id - Get user by ID',
-              'POST /api/echo - Echo request body'
-            ]
-          })),
-          {
-            headers: { 'Content-Type': 'application/json' }
-          }
-        );
-      }
+      // Root endpoint - Handle both POST and GET
+      if (url.pathname === '/') {
+        if (method === 'POST') {
+          // Handle incoming messages from CLI
+          return request.json().then((body: any) => {
+            const message = body.message || body;
+            console.log('📨 Received message:', message);
+            
+            // Echo back for now (future: process with AI Agent)
+            return new Response(
+              JSON.stringify(createResponse(true, { 
+                echo: message,
+                processed: `Processed: ${message}` 
+              })),
+              {
+                headers: { 'Content-Type': 'application/json' }
+              }
+            );
+          });
+        } else if (method === 'GET') {
+          // SSE endpoint for real-time communication
+          const headers = new Headers({
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Headers': 'Cache-Control'
+          });
 
-      // Get all users
-      if (url.pathname === '/api/users' && method === 'GET') {
-        return new Response(
-          JSON.stringify(createResponse(true, dummyUsers)),
-          {
-            headers: { 'Content-Type': 'application/json' }
-          }
-        );
-      }
+          const stream = new ReadableStream({
+            start(controller) {
+              // Send initial connection message
+              controller.enqueue(`data: ${JSON.stringify({ 
+                type: 'connected', 
+                message: 'Connected to Bun Buddy Service' 
+              })}\n\n`);
 
-      // Get user by ID
-      if (url.pathname.startsWith('/api/users/') && method === 'GET') {
-        const userIdStr = url.pathname.split('/')[3];
-        if (!userIdStr) {
-          return new Response(
-            JSON.stringify(createResponse(false, null, 'Invalid user ID')),
-            {
-              status: 400,
-              headers: { 'Content-Type': 'application/json' }
+              // Store client for broadcasting
+              connectedClients.add(controller);
+
+              // Send periodic heartbeat
+              const heartbeat = setInterval(() => {
+                try {
+                  controller.enqueue(`data: ${JSON.stringify({ 
+                    type: 'heartbeat', 
+                    timestamp: new Date().toISOString() 
+                  })}\n\n`);
+                } catch {
+                  clearInterval(heartbeat);
+                  connectedClients.delete(controller);
+                }
+              }, 30000);
+
+              // Cleanup on close
+              request.signal?.addEventListener('abort', () => {
+                clearInterval(heartbeat);
+                connectedClients.delete(controller);
+                controller.close();
+              });
             }
-          );
+          });
+
+          return new Response(stream, { headers });
         }
-        const userId = parseInt(userIdStr);
-        const user = dummyUsers.find(u => u.id === userId);
-
-        if (user) {
-          return new Response(
-            JSON.stringify(createResponse(true, user)),
-            {
-              headers: { 'Content-Type': 'application/json' }
-            }
-          );
-        } else {
-          return new Response(
-            JSON.stringify(createResponse(false, null, 'User not found')),
-            {
-              status: 404,
-              headers: { 'Content-Type': 'application/json' }
-            }
-          );
-        }
-      }
-
-      // Echo endpoint
-      if (url.pathname === '/api/echo' && method === 'POST') {
-        return request.json().then(body => {
-          return new Response(
-            JSON.stringify(createResponse(true, body, 'Echo response')),
-            {
-              headers: { 'Content-Type': 'application/json' }
-            }
-          );
-        });
-      }
-
-      // Root endpoint
-      if (url.pathname === '/' && method === 'GET') {
-        return new Response(
-          JSON.stringify(createResponse(true, {
-            message: 'Welcome to Bun Buddy API!',
-            documentation: '/api/info'
-          })),
-          {
-            headers: { 'Content-Type': 'application/json' }
-          }
-        );
       }
 
       // 404 for unmatched routes
@@ -159,10 +142,15 @@ export async function createServer() {
 
   // Keep the process alive
   process.on('SIGINT', () => {
-    console.log('\n� Shutting down server gracefully...');
+    console.log('\n🛑 Shutting down server gracefully...');
     server.stop();
     process.exit(0);
   });
 
   return server;
+}
+
+// Auto-start when run directly (not in CLI mode)
+if (process.env.CLI_MODE !== 'true') {
+  createServer().catch(console.error);
 }

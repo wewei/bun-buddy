@@ -1,216 +1,5 @@
 # 🤖 Bun Buddy
 
-# 🦄 Bun Buddy
-
-A dummy service and CLI application built with Bun, featuring a REST API server and a beautiful command-line interface.
-
-## 🚀 Features
-
-### Service
-- **RESTful API** built with Bun's native HTTP server
-- **Health check endpoint** for monitoring
-- **User management endpoints** (dummy data)
-- **Echo endpoint** for testing
-- **JSON responses** with consistent structure
-- **Error handling** and logging
-
-### CLI Tool
-- **Beautiful CLI** built with Commander.js and Chalk
-- **Service status checking** 
-- **API endpoint testing**
-- **Development information display**
-- **Interactive spinners** with Ora
-
-## 📦 Installation
-
-```bash
-# Install dependencies
-bun install
-```
-
-## 🎯 Usage
-
-### Starting the Service
-
-```bash
-# Start the service
-bun run service
-
-# Or start with the main entry point
-bun run start
-```
-
-The service will start at `http://localhost:3000`
-
-### Using the CLI
-
-```bash
-# Check service status
-bun run cli status
-
-# Show development information
-bun run cli dev-info
-
-# Test API endpoints
-bun run cli test-api
-
-# Show help
-bun run cli --help
-```
-
-### Available Scripts
-
-```json
-{
-  "start": "bun run index.ts",         
-  "dev": "bun --watch index.ts",       
-  "service": "bun run src/service/index.ts",  
-  "cli": "bun run src/cli/simple.ts"          
-}
-```
-
-## 🌐 API Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/` | Welcome message |
-| `GET` | `/health` | Health check |
-| `GET` | `/api/info` | API information |
-| `GET` | `/api/users` | List all users |
-| `GET` | `/api/users/:id` | Get user by ID |
-| `POST` | `/api/echo` | Echo request body |
-
-### Example API Calls
-
-```bash
-# Health check
-curl http://localhost:3000/health
-
-# Get all users
-curl http://localhost:3000/api/users
-
-# Get specific user
-curl http://localhost:3000/api/users/1
-
-# Echo test
-curl -X POST http://localhost:3000/api/echo \
-  -H "Content-Type: application/json" \
-  -d '{"message": "Hello Bun!"}'
-```
-
-## 📁 Project Structure
-
-```
-bun-buddy/
-├── src/
-│   ├── config/
-│   │   └── index.ts          # Configuration management
-│   ├── service/
-│   │   ├── server.ts         # Bun HTTP server implementation
-│   │   └── index.ts          # Service entry point
-│   └── cli/
-│       ├── commands.ts       # CLI command definitions (full)
-│       ├── simple.ts         # Simplified CLI (active)
-│       ├── utils.ts          # CLI utilities
-│       └── index.ts          # CLI entry point (full)
-├── index.ts                  # Main application entry
-├── cli.ts                    # CLI executable entry
-├── package.json              # Dependencies and scripts
-└── README.md                 # This file
-```
-
-## 🛠️ Development
-
-### Configuration
-
-The application configuration is centralized in `src/config/index.ts`:
-
-```typescript
-{
-  service: {
-    port: 3000,     // Can be overridden with PORT env var
-    host: 'localhost'  // Can be overridden with HOST env var
-  },
-  cli: {
-    name: 'bun-buddy',
-    version: '1.0.0'
-  }
-}
-```
-
-### Environment Variables
-
-- `PORT` - Service port (default: 3000)
-- `HOST` - Service host (default: localhost)
-
-## 🎨 CLI Features
-
-The CLI tool provides a beautiful interface with:
-
-- 🎨 **Colorized output** using Chalk
-- ⏳ **Interactive spinners** using Ora  
-- 📊 **Formatted tables** and information display
-- 🔍 **Service health monitoring**
-- 🧪 **API endpoint testing**
-
-### CLI Commands
-
-```bash
-# Service status with uptime
-bun run cli status
-
-# Development information  
-bun run cli dev-info
-
-# Test all API endpoints
-bun run cli test-api
-
-# Help and examples
-bun run cli --help
-```
-
-## 🚦 Service Response Format
-
-All API endpoints return responses in this consistent format:
-
-```typescript
-interface ApiResponse<T = any> {
-  success: boolean;
-  data?: T;
-  message?: string;
-  timestamp: string;
-}
-```
-
-## 🔧 Built With
-
-- **[Bun](https://bun.sh)** - Fast JavaScript runtime and HTTP server
-- **[Commander.js](https://github.com/tj/commander.js)** - Command-line interface framework
-- **[Chalk](https://github.com/chalk/chalk)** - Terminal string styling
-- **[Ora](https://github.com/sindresorhus/ora)** - Elegant terminal spinners
-- **TypeScript** - Type-safe JavaScript
-
-## 🎯 Getting Started
-
-1. **Clone or download** this project
-2. **Install dependencies**: `bun install`
-3. **Start the service**: `bun run service`
-4. **Open another terminal** and test the CLI: `bun run cli status`
-5. **Visit** `http://localhost:3000` in your browser
-6. **Explore the API** endpoints listed above
-
-## � Notes
-
-- Built with Bun v1.2.8
-- Uses native Bun HTTP server (no Express needed)
-- TypeScript with strict mode enabled
-- ESNext modules with bundler resolution
-- Development-friendly with hot reloading support
-
----
-
-*This project demonstrates Bun's capabilities for building both HTTP services and CLI applications with a modern TypeScript setup.*
-
 ### 代码结构
 ```
 bun-buddy/
@@ -294,9 +83,24 @@ Bun Buddy 采用后台服务 + 命令行工具的架构：
 - **服务访问**: 与运行中的服务交互
 
 ### API 接口
-服务提供一个统一的 endpoint，包含两个核心接口：
-- **POST 接口**: 向 Agent 发送消息和指令
-- **GET SSE 接口**: 实时接收来自 Agent 的消息流
+服务在根路径（`/`）提供两个核心接口：
+
+#### POST / - 发送消息
+```bash
+curl -X POST http://localhost:3000/ \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Hello Buddy"}'
+```
+
+#### GET / - SSE 实时消息流
+```bash
+curl -H "Accept: text/event-stream" http://localhost:3000/
+```
+
+#### POST /shutdown - 关闭服务
+```bash
+curl -X POST http://localhost:3000/shutdown
+```
 
 ## 🚀 快速开始
 
@@ -310,51 +114,36 @@ bun install
 bun run index.ts
 ```
 
-### 使用 buddy 命令（开发中）
+### 使用 buddy 命令
 ```bash
-# 启动服务
-buddy start
+# 服务管理
+buddy server start          # 启动服务（后台运行）
+buddy server state          # 检查服务状态
+buddy server stop           # 停止服务
+buddy server restart        # 重启服务
 
-# 检查服务状态
-buddy status
+# 配置管理
+buddy config get            # 查看所有配置
+buddy config get server.port  # 查看特定配置
+buddy config set server.port 8080  # 设置配置
 
-# 停止服务
-buddy stop
-
-# 重启服务
-buddy restart
+# 服务连接
+buddy connect               # 连接到本地服务进行交互
+buddy connect http://remote-server:3000  # 连接到远程服务
 ```
 
 ## 📋 开发计划
 
-- [ ] 实现核心 HTTP 服务
-- [ ] 开发 `buddy` 命令行工具
+- [x] ~~实现核心 HTTP 服务~~
+- [x] ~~开发 `buddy` 命令行工具~~
+- [x] ~~实现服务管理（启动/停止/状态/重启）~~
+- [x] ~~实现配置管理~~
+- [x] ~~实现服务连接功能~~
 - [ ] 实现脚本管理系统
 - [ ] 添加依赖管理功能
 - [ ] 集成互联网访问能力
-- [ ] 完善 API 文档
+- [ ] 完善 SSE 实时通信
 - [ ] 添加测试覆盖
-
-## � 项目结构
-
-```
-bun-buddy/
-├── src/
-│   ├── cli/           # buddy 命令行工具
-│   │   ├── commands/  # 各种 buddy 子命令实现
-│   │   ├── utils/     # CLI 工具函数
-│   │   └── index.ts   # CLI 入口文件
-│   └── server/        # HTTP 服务
-│       ├── routes/    # API 路由处理
-│       ├── services/  # 核心业务逻辑
-│       ├── types/     # 类型定义
-│       └── index.ts   # 服务器入口文件
-├── scripts/           # 用户脚本存储目录
-├── drafts/           # 脚本草稿存储目录
-├── package.json
-├── tsconfig.json
-└── README.md
-```
 
 ## �🛠️ 技术栈
 

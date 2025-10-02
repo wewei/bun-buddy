@@ -2,35 +2,38 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import { spinner } from './utils';
 import config from '../config';
+import { userConfigManager } from '../config/userConfig';
+import { serviceManager } from './serviceManager';
 
 // Service related commands
-export function createServiceCommands() {
-  const service = new Command('service')
-    .description('Service management commands')
-    .alias('svc');
+export function createServerCommands() {
+  const server = new Command('server')
+    .description('Service management commands');
 
-  service
+  server
     .command('start')
-    .description('Start the Bun Buddy service')
-    .option('-p, --port <port>', 'Port to run on', config.service.port.toString())
-    .option('-h, --host <host>', 'Host to bind to', config.service.host)
+    .description('Start the Bun Buddy service in background')
+    .option('-p, --port <port>', 'Port to run on')
+    .option('-h, --host <host>', 'Host to bind to')
     .action(async (options: { port?: string; host?: string }) => {
       const spin = spinner('Starting service...');
       spin.start();
 
       try {
-        // Set CLI mode to prevent auto-start in other modules
-        process.env.CLI_SERVICE_START = 'true';
+        const serviceHost = options.host;
+        const servicePort = options.port ? parseInt(options.port) : undefined;
 
-        // Import service dynamically to avoid loading it unless needed
-        const { createServer } = await import('../service/server');
-
-        // Override config with CLI options
-        if (options.port) config.service.port = parseInt(options.port);
-        if (options.host) config.service.host = options.host;
-
-        await createServer();
-        spin.succeed(chalk.green('Service started successfully!'));
+        const result = await serviceManager.startService(serviceHost, servicePort);
+        
+        if (result.success) {
+          spin.succeed(chalk.green(result.message));
+          if (result.pid) {
+            console.log(chalk.cyan('PID:'), result.pid);
+          }
+        } else {
+          spin.fail(chalk.red(result.message));
+          process.exit(1);
+        }
       } catch (error) {
         spin.fail(chalk.red('Failed to start service'));
         console.error(error);
@@ -38,91 +41,255 @@ export function createServiceCommands() {
       }
     });
 
-  service
-    .command('status')
+  server
+    .command('state')
+    .alias('status')
     .description('Check service status')
     .action(async () => {
       const spin = spinner('Checking service status...');
       spin.start();
 
       try {
-        const response = await fetch(`http://${config.service.host}:${config.service.port}/health`);
-        const data = await response.json() as { success: boolean; data?: { uptime: number } };
-
-        if (data.success) {
-          spin.succeed(chalk.green('Service is healthy'));
-          console.log(chalk.cyan('Uptime:'), data.data?.uptime || 0, 'seconds');
+        const status = await serviceManager.getServiceStatus();
+        
+        if (status.isRunning && status.info) {
+          if (status.healthy) {
+            spin.succeed(chalk.green('Service is running and healthy'));
+          } else {
+            spin.warn(chalk.yellow('Service is running but not responding'));
+          }
+          
+          console.log(chalk.cyan('PID:'), status.info.pid);
+          console.log(chalk.cyan('Host:'), status.info.host);
+          console.log(chalk.cyan('Port:'), status.info.port);
+          console.log(chalk.cyan('Started:'), new Date(status.info.startTime).toLocaleString());
+          console.log(chalk.cyan('URL:'), `http://${status.info.host}:${status.info.port}`);
         } else {
-          spin.fail(chalk.red('Service is not healthy'));
+          spin.fail(chalk.red('Service is not running'));
+          console.log(chalk.yellow('Tip:'), 'Use', chalk.cyan('buddy server start'), 'to start the service');
         }
       } catch (error) {
-        spin.fail(chalk.red('Service is not running'));
-        console.log(chalk.yellow('Tip:'), 'Use', chalk.cyan('bun-buddy service start'), 'to start the service');
+        spin.fail(chalk.red('Error checking service status'));
+        console.error(error);
       }
     });
 
-  return service;
-}
+  server
+    .command('stop')
+    .description('Stop the service')
+    .action(async () => {
+      const spin = spinner('Stopping service...');
+      spin.start();
 
-// Developer utility commands
-export function createDevCommands() {
-  const dev = new Command('dev')
-    .description('Developer utilities');
-
-  dev
-    .command('info')
-    .description('Show development information')
-    .action(() => {
-      console.log(chalk.blue.bold('🦄 Bun Buddy Development Info'));
-      console.log('');
-      console.log(chalk.cyan('Project:'), config.cli.name);
-      console.log(chalk.cyan('Version:'), config.cli.version);
-      console.log(chalk.cyan('Service URL:'), `http://${config.service.host}:${config.service.port}`);
-      console.log(chalk.cyan('Bun Version:'), Bun.version);
-      console.log('');
-      console.log(chalk.yellow('Available endpoints:'));
-      console.log('  GET  /', chalk.gray('- Welcome message'));
-      console.log('  GET  /health', chalk.gray('- Health check'));
-      console.log('  GET  /api/info', chalk.gray('- API information'));
-      console.log('  GET  /api/users', chalk.gray('- List all users'));
-      console.log('  GET  /api/users/:id', chalk.gray('- Get user by ID'));
-      console.log('  POST /api/echo', chalk.gray('- Echo request body'));
+      try {
+        const result = await serviceManager.stopService();
+        
+        if (result.success) {
+          spin.succeed(chalk.green(result.message));
+        } else {
+          spin.fail(chalk.red(result.message));
+        }
+      } catch (error) {
+        spin.fail(chalk.red('Error stopping service'));
+        console.error(error);
+      }
     });
 
-  dev
-    .command('test-api')
-    .description('Test API endpoints')
+  server
+    .command('restart')
+    .description('Restart the service')
     .action(async () => {
-      const baseUrl = `http://${config.service.host}:${config.service.port}`;
+      console.log(chalk.blue('Restarting service...'));
+      
+      // Try to stop first
+      console.log(chalk.yellow('Stopping existing service...'));
+      const stopResult = await serviceManager.stopService();
+      if (stopResult.success) {
+        console.log(chalk.green(stopResult.message));
+      } else {
+        console.log(chalk.yellow(stopResult.message));
+      }
 
-      console.log(chalk.blue.bold('🧪 Testing API Endpoints'));
-      console.log('');
+      // Wait a moment for cleanup
+      await new Promise(resolve => setTimeout(resolve, 1000));
 
-      const endpoints = [
-        { method: 'GET', path: '/health', description: 'Health check' },
-        { method: 'GET', path: '/api/info', description: 'API info' },
-        { method: 'GET', path: '/api/users', description: 'List users' },
-        { method: 'GET', path: '/api/users/1', description: 'Get user by ID' }
-      ];
+      // Start the service
+      const spin = spinner('Starting service...');
+      spin.start();
 
-      for (const endpoint of endpoints) {
-        const spin = spinner(`Testing ${endpoint.method} ${endpoint.path}`);
+      try {
+        const startResult = await serviceManager.startService();
+        
+        if (startResult.success) {
+          spin.succeed(chalk.green('Service restarted successfully!'));
+          if (startResult.pid) {
+            console.log(chalk.cyan('PID:'), startResult.pid);
+          }
+        } else {
+          spin.fail(chalk.red(startResult.message));
+          process.exit(1);
+        }
+      } catch (error) {
+        spin.fail(chalk.red('Failed to restart service'));
+        console.error(error);
+        process.exit(1);
+      }
+    });
+
+  return server;
+}
+
+// Config management commands
+export function createConfigCommands() {
+  const configCmd = new Command('config')
+    .description('Configuration management commands');
+
+  configCmd
+    .command('get')
+    .argument('[keyPath]', 'Configuration key path (e.g., server.host)')
+    .description('Get configuration value')
+    .action((keyPath?: string) => {
+      try {
+        if (keyPath) {
+          const value = userConfigManager.getConfigValue(keyPath);
+          if (value !== undefined) {
+            console.log(chalk.cyan(keyPath + ':'), value);
+          } else {
+            console.log(chalk.red('Configuration key not found:'), keyPath);
+            process.exit(1);
+          }
+        } else {
+          const config = userConfigManager.loadConfig();
+          console.log(chalk.blue.bold('Current Configuration:'));
+          console.log(JSON.stringify(config, null, 2));
+        }
+      } catch (error) {
+        console.error(chalk.red('Failed to get configuration:'), error);
+        process.exit(1);
+      }
+    });
+
+  configCmd
+    .command('set')
+    .argument('<keyPath>', 'Configuration key path (e.g., server.host)')
+    .argument('<value>', 'Configuration value')
+    .description('Set configuration value')
+    .action((keyPath: string, value: string) => {
+      try {
+        // Try to parse as number if it looks like a number
+        let parsedValue: any = value;
+        if (/^\d+$/.test(value)) {
+          parsedValue = parseInt(value);
+        } else if (/^\d+\.\d+$/.test(value)) {
+          parsedValue = parseFloat(value);
+        } else if (value.toLowerCase() === 'true') {
+          parsedValue = true;
+        } else if (value.toLowerCase() === 'false') {
+          parsedValue = false;
+        }
+
+        userConfigManager.setConfigValue(keyPath, parsedValue);
+        console.log(chalk.green('Configuration updated:'), chalk.cyan(keyPath), '=', parsedValue);
+      } catch (error) {
+        console.error(chalk.red('Failed to set configuration:'), error);
+        process.exit(1);
+      }
+    });
+
+  return configCmd;
+}
+
+// Connect command
+export function createConnectCommand() {
+  const connect = new Command('connect')
+    .argument('[endpointUrl]', 'Service endpoint URL (defaults to config)')
+    .description('Connect to service in interactive mode')
+    .action(async (endpointUrl?: string) => {
+      try {
+        let serviceUrl = endpointUrl;
+        if (!serviceUrl) {
+          const userConfig = userConfigManager.loadConfig();
+          serviceUrl = `http://${userConfig.server.host}:${userConfig.server.port}`;
+        }
+
+        console.log(chalk.blue.bold('🔌 Connecting to Bun Buddy Service'));
+        console.log(chalk.cyan('URL:'), serviceUrl);
+        console.log('');
+
+        // Test connection first
+        const spin = spinner('Testing connection...');
         spin.start();
 
         try {
-          const response = await fetch(`${baseUrl}${endpoint.path}`);
-          const data = await response.json() as { success: boolean };
+          const response = await fetch(`${serviceUrl}/`);
+          
+          if (response.ok && response.headers.get('content-type')?.includes('text/event-stream')) {
+            spin.succeed(chalk.green('Connected successfully!'));
+            console.log(chalk.yellow('Interactive mode - Type your messages below:'));
+            console.log(chalk.gray('(Press Ctrl+C to exit)'));
+            console.log('');
 
-          if (response.ok && data.success) {
-            spin.succeed(chalk.green(`${endpoint.method} ${endpoint.path} - OK`));
+            // Start interactive mode
+            await startInteractiveMode(serviceUrl);
           } else {
-            spin.fail(chalk.red(`${endpoint.method} ${endpoint.path} - Failed`));
+            spin.fail(chalk.red('Service is not healthy'));
+            process.exit(1);
           }
         } catch (error) {
-          spin.fail(chalk.red(`${endpoint.method} ${endpoint.path} - Error`));
+          spin.fail(chalk.red('Failed to connect to service'));
+          console.log(chalk.yellow('Make sure the service is running with:'), chalk.cyan('buddy server start'));
+          process.exit(1);
         }
+      } catch (error) {
+        console.error(chalk.red('Connection error:'), error);
+        process.exit(1);
       }
     });
 
-  return dev;
+  return connect;
+}
+
+async function startInteractiveMode(serviceUrl: string) {
+  const readline = await import('readline');
+  
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+    prompt: chalk.cyan('> ')
+  });
+
+  // Note: SSE implementation would require additional setup in CLI environment
+  console.log(chalk.yellow('Note: Real-time messaging will be implemented in future version'));
+
+  rl.prompt();
+
+  rl.on('line', async (input) => {
+    const message = input.trim();
+    if (message) {
+      try {
+        const response = await fetch(`${serviceUrl}/`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ message })
+        });
+
+        const data = await response.json() as { success: boolean; message?: string };
+        if (data.success) {
+          console.log(chalk.blue('Sent:'), message);
+        } else {
+          console.log(chalk.red('Failed to send message:'), data.message);
+        }
+      } catch (error) {
+        console.log(chalk.red('Error sending message:'), error);
+      }
+    }
+    rl.prompt();
+  });
+
+  rl.on('close', () => {
+    console.log(chalk.yellow('\nDisconnected from service'));
+    process.exit(0);
+  });
 }
