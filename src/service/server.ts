@@ -19,6 +19,7 @@ function createResponse<T>(success: boolean, data?: T, message?: string): ApiRes
 
 // Store for connected clients (for SSE implementation)
 const connectedClients = new Set<ReadableStreamDefaultController>();
+const activeConnections = new Set<any>();
 
 export async function createServer(host?: string, port?: number) {
   const serviceHost = host || process.env.SERVICE_HOST || config.service.host;
@@ -43,11 +44,28 @@ export async function createServer(host?: string, port?: number) {
             const message = body.message || body;
             console.log('📨 Received message:', message);
             
-            // Echo back for now (future: process with AI Agent)
+            // Broadcast to all connected SSE clients
+            const broadcastData = {
+              type: 'echo',
+              message: message,
+              timestamp: new Date().toISOString()
+            };
+            
+            connectedClients.forEach(controller => {
+              try {
+                controller.enqueue(`data: ${JSON.stringify(broadcastData)}\n\n`);
+              } catch (error) {
+                // Remove dead clients
+                connectedClients.delete(controller);
+              }
+            });
+            
+            // Echo back response
             return new Response(
               JSON.stringify(createResponse(true, { 
                 echo: message,
-                processed: `Processed: ${message}` 
+                broadcasted: connectedClients.size > 0,
+                clientCount: connectedClients.size
               })),
               {
                 headers: { 'Content-Type': 'application/json' }
@@ -66,14 +84,16 @@ export async function createServer(host?: string, port?: number) {
 
           const stream = new ReadableStream({
             start(controller) {
-              // Send initial connection message
-              controller.enqueue(`data: ${JSON.stringify({ 
-                type: 'connected', 
-                message: 'Connected to Bun Buddy Service' 
+              // Send Welcome Event
+              controller.enqueue(`event: welcome\ndata: ${JSON.stringify({ 
+                message: 'Welcome to Bun Buddy Debug Server',
+                timestamp: new Date().toISOString()
               })}\n\n`);
 
               // Store client for broadcasting
               connectedClients.add(controller);
+              activeConnections.add(controller);
+              console.log(`📡 SSE Client connected. Total clients: ${connectedClients.size}`);
 
               // Send periodic heartbeat
               const heartbeat = setInterval(() => {
@@ -82,7 +102,8 @@ export async function createServer(host?: string, port?: number) {
                     type: 'heartbeat', 
                     timestamp: new Date().toISOString() 
                   })}\n\n`);
-                } catch {
+                } catch (error) {
+                  console.log(`📡 Heartbeat failed, cleaning up client`);
                   clearInterval(heartbeat);
                   connectedClients.delete(controller);
                 }
@@ -92,8 +113,17 @@ export async function createServer(host?: string, port?: number) {
               request.signal?.addEventListener('abort', () => {
                 clearInterval(heartbeat);
                 connectedClients.delete(controller);
-                controller.close();
+                activeConnections.delete(controller);
+                console.log(`📡 SSE Client disconnected. Total clients: ${connectedClients.size}`);
+                try {
+                  controller.close();
+                } catch {}
               });
+            },
+            
+            cancel() {
+              // This is called when the client cancels the stream
+              console.log(`📡 SSE Client cancelled connection`);
             }
           });
 
