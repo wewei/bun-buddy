@@ -99,34 +99,19 @@ export function createServerCommands() {
     .command('restart')
     .description('Restart the service')
     .action(async () => {
-      console.log(chalk.blue('Restarting service...'));
-      
-      // Try to stop first
-      console.log(chalk.yellow('Stopping existing service...'));
-      const stopResult = await serviceManager.stopService();
-      if (stopResult.success) {
-        console.log(chalk.green(stopResult.message));
-      } else {
-        console.log(chalk.yellow(stopResult.message));
-      }
-
-      // Wait a moment for cleanup
-      await new Promise(resolve => setTimeout(resolve, 1000));
-
-      // Start the service
-      const spin = spinner('Starting service...');
+      const spin = spinner('Restarting service...');
       spin.start();
 
       try {
-        const startResult = await serviceManager.startService();
+        const result = await serviceManager.restartService();
         
-        if (startResult.success) {
-          spin.succeed(chalk.green('Service restarted successfully!'));
-          if (startResult.pid) {
-            console.log(chalk.cyan('PID:'), startResult.pid);
+        if (result.success) {
+          spin.succeed(chalk.green(result.message));
+          if (result.pid) {
+            console.log(chalk.cyan('PID:'), result.pid);
           }
         } else {
-          spin.fail(chalk.red(startResult.message));
+          spin.fail(chalk.red(result.message));
           process.exit(1);
         }
       } catch (error) {

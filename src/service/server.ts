@@ -35,23 +35,6 @@ export async function createServer(host?: string, port?: number) {
       const url = new URL(request.url);
       const method = request.method;
 
-      // Shutdown endpoint for CLI stop command
-      if (url.pathname === '/shutdown' && method === 'POST') {
-        // Send response first
-        setTimeout(() => {
-          console.log('\n🛑 Shutting down server via API...');
-          server.stop();
-          process.exit(0);
-        }, 100);
-
-        return new Response(
-          JSON.stringify(createResponse(true, null, 'Server shutting down')),
-          {
-            headers: { 'Content-Type': 'application/json' }
-          }
-        );
-      }
-
       // Root endpoint - Handle both POST and GET
       if (url.pathname === '/') {
         if (method === 'POST') {
