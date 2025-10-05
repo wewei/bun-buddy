@@ -124,6 +124,42 @@ async function sendWithResponse(serviceUrl: string, message: string) {
           // Silent heartbeat handling
         });
         
+        eventSource.addEventListener('user_message', (event: any) => {
+          try {
+            const data = JSON.parse(event.data);
+            handleSSEMessage(data);
+          } catch (error) {
+            console.log(chalk.gray('📡 Raw user_message data:'), event.data);
+          }
+        });
+        
+        eventSource.addEventListener('llm_response', (event: any) => {
+          try {
+            const data = JSON.parse(event.data);
+            handleSSEMessage(data);
+          } catch (error) {
+            console.log(chalk.gray('📡 Raw llm_response data:'), event.data);
+          }
+        });
+        
+        eventSource.addEventListener('llm_complete', (event: any) => {
+          try {
+            const data = JSON.parse(event.data);
+            handleSSEMessage(data);
+          } catch (error) {
+            console.log(chalk.gray('📡 Raw llm_complete data:'), event.data);
+          }
+        });
+        
+        eventSource.addEventListener('llm_error', (event: any) => {
+          try {
+            const data = JSON.parse(event.data);
+            handleSSEMessage(data);
+          } catch (error) {
+            console.log(chalk.gray('📡 Raw llm_error data:'), event.data);
+          }
+        });
+        
         eventSource.onerror = (error: any) => {
           // Only log error if we haven't completed successfully
           if (!hasReceivedUserMessage) {
