@@ -1,133 +1,192 @@
 import OpenAI from 'openai';
-import config, { type Endpoint } from '../config';
 import { randomUUID } from 'crypto';
 
-export interface ChatMessage {
+// 基础类型定义
+export type ChatMessage = {
   role: 'user' | 'assistant' | 'system';
   content: string;
-}
+};
 
-export interface StreamingResponse {
+export type CompletionChunk = {
   trackingId: string;
   content: string;
   finished: boolean;
+  error?: string;
+};
+
+export type LLMConfig = {
+  endpoint: {
+    url: string;
+    key: string;
+    model: string;
+  };
+  temperature?: number;
+  maxTokens?: number;
+  tools?: OpenAI.Chat.Completions.ChatCompletionTool[];
+  stream?: boolean;
+};
+
+// 配置工厂函数
+export const createLLMConfig = (config: Partial<LLMConfig> & { endpoint: LLMConfig['endpoint'] }): LLMConfig => ({
+  temperature: 0.7,
+  maxTokens: 2000,
+  stream: true,
+  ...config
+});
+
+// 验证配置
+export const validateLLMConfig = (config: LLMConfig): void => {
+  if (!config.endpoint.url) {
+    throw new Error('LLM endpoint URL is required');
+  }
+  if (!config.endpoint.key) {
+    throw new Error('LLM API key is required');
+  }
+  if (!config.endpoint.model) {
+    throw new Error('LLM model is required');
+  }
+};
+
+// 创建 OpenAI 客户端
+export const createOpenAIClient = (config: LLMConfig): OpenAI => {
+  validateLLMConfig(config);
+  return new OpenAI({
+    apiKey: config.endpoint.key,
+    baseURL: config.endpoint.url
+  });
+};
+
+// 转换消息格式
+export const convertToOpenAIMessages = (messages: ChatMessage[]): OpenAI.Chat.Completions.ChatCompletionMessageParam[] =>
+  messages.map(msg => ({
+    role: msg.role,
+    content: msg.content
+  }));
+
+// 生成追踪 ID
+export const generateTrackingId = (): string => randomUUID();
+
+// 创建完成块
+export const createCompletionChunk = (
+  trackingId: string,
+  content: string,
+  finished: boolean = false,
+  error?: string
+): CompletionChunk => ({
+  trackingId,
+  content,
+  finished,
+  ...(error && { error })
+});
+
+// 主 LLM 流式请求函数
+export const streamLLMCompletion = async function* (
+  config: LLMConfig,
+  messages: ChatMessage[],
+  trackingId?: string
+): AsyncGenerator<CompletionChunk, void, unknown> {
+  const id = trackingId || generateTrackingId();
+  const client = createOpenAIClient(config);
+  const openaiMessages = convertToOpenAIMessages(messages);
+
+  try {
+    console.log(`🤖 Starting LLM completion request with tracking ID: ${id}`);
+
+    const stream = await client.chat.completions.create({
+      model: config.endpoint.model,
+      messages: openaiMessages,
+      stream: config.stream ?? true,
+      temperature: config.temperature,
+      max_tokens: config.maxTokens,
+      ...(config.tools && { tools: config.tools })
+    }) as AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>;
+
+    for await (const chunk of stream) {
+      const delta = chunk.choices[0]?.delta;
+      const content = delta?.content;
+      
+      if (content) {
+        yield createCompletionChunk(id, content, false);
+      }
+    }
+
+    // 发送完成信号
+    yield createCompletionChunk(id, '', true);
+    
+  } catch (error) {
+    console.error(`🤖 LLM completion error (${id}):`, error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    yield createCompletionChunk(id, '', true, errorMessage);
+  }
+};
+
+// 辅助函数：从配置创建 LLM 配置
+export const createLLMConfigFromEndpoint = (
+  endpoint: { url: string; key: string; model: string },
+  options?: Partial<LLMConfig>
+): LLMConfig => createLLMConfig({
+  endpoint,
+  ...options
+});
+
+// 辅助函数：处理流式响应的回调
+export const withCallback = async function* (
+  stream: AsyncGenerator<CompletionChunk, void, unknown>,
+  onChunk?: (chunk: CompletionChunk) => void
+): AsyncGenerator<CompletionChunk, void, unknown> {
+  for await (const chunk of stream) {
+    if (onChunk) {
+      onChunk(chunk);
+    }
+    yield chunk;
+  }
+};
+
+
+/*
+使用示例：
+
+// 1. 基本用法
+const config = createLLMConfig({
+  endpoint: {
+    url: 'https://api.openai.com/v1',
+    key: 'your-api-key',
+    model: 'gpt-4'
+  },
+  temperature: 0.8,
+  maxTokens: 1000
+});
+
+const messages: ChatMessage[] = [
+  { role: 'user', content: 'Hello, how are you?' }
+];
+
+// 流式处理
+for await (const chunk of streamLLMCompletion(config, messages)) {
+  if (chunk.finished) {
+    console.log('Completion finished');
+    if (chunk.error) {
+      console.error('Error:', chunk.error);
+    }
+  } else {
+    process.stdout.write(chunk.content);
+  }
 }
 
-export class LLMClient {
-  private endpoint: Endpoint;
-  private openai: OpenAI;
+// 2. 带回调的用法
+const stream = streamLLMCompletion(config, messages);
+const streamWithCallback = withCallback(stream, (chunk) => {
+  console.log('Received chunk:', chunk);
+});
 
-  constructor(endpointName?: string) {
-    const currentEndpoint = endpointName || config.llm.current;
-    const endpoint = config.llm.endpoints[currentEndpoint];
-    
-    if (!endpoint) {
-      throw new Error(`LLM endpoint "${currentEndpoint}" not found in configuration`);
-    }
-    
-    this.endpoint = endpoint;
-    
-    if (!this.endpoint.key) {
-      throw new Error(`API key not configured for endpoint "${currentEndpoint}"`);
-    }
-
-    // Initialize OpenAI client with custom base URL and API key
-    this.openai = new OpenAI({
-      apiKey: this.endpoint.key,
-      baseURL: this.endpoint.url
-    });
-  }
-
-  /**
-   * Send a completion request and handle streaming response
-   */
-  async *streamCompletion(
-    messages: ChatMessage[], 
-    onChunk?: (chunk: StreamingResponse) => void,
-    externalTrackingId?: string
-  ): AsyncGenerator<StreamingResponse, void, unknown> {
-    const trackingId = externalTrackingId || randomUUID();
-    
-    try {
-      console.log(`🤖 Starting LLM completion request with tracking ID: ${trackingId}`);
-      
-      // Convert our ChatMessage format to OpenAI format
-      const openaiMessages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = messages.map(msg => ({
-        role: msg.role,
-        content: msg.content
-      }));
-
-      const stream = await this.openai.chat.completions.create({
-        model: this.endpoint.model,
-        messages: openaiMessages,
-        stream: true,
-        temperature: 0.7,
-        max_tokens: 2000
-      });
-
-      for await (const chunk of stream) {
-        const delta = chunk.choices[0]?.delta;
-        const content = delta?.content;
-        
-        if (content) {
-          const streamResponse: StreamingResponse = {
-            trackingId,
-            content,
-            finished: false
-          };
-          
-          if (onChunk) {
-            onChunk(streamResponse);
-          }
-          yield streamResponse;
-        }
-      }
-
-      // Send final finished response
-      const finalResponse: StreamingResponse = {
-        trackingId,
-        content: '',
-        finished: true
-      };
-      
-      if (onChunk) {
-        onChunk(finalResponse);
-      }
-      yield finalResponse;
-      
-    } catch (error) {
-      console.error(`🤖 LLM completion error (${trackingId}):`, error);
-      const errorResponse: StreamingResponse = {
-        trackingId,
-        content: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        finished: true
-      };
-      
-      if (onChunk) {
-        onChunk(errorResponse);
-      }
-      yield errorResponse;
-    }
-  }
-
-
-
-  /**
-   * Get the current endpoint configuration
-   */
-  getEndpoint(): Endpoint {
-    return { ...this.endpoint };
-  }
-
-  /**
-   * Get tracking ID for the next request
-   */
-  generateTrackingId(): string {
-    return randomUUID();
-  }
+for await (const chunk of streamWithCallback) {
+  // 处理 chunk
 }
 
-// Export a function to create default instance when needed
-export function createDefaultLLMClient(): LLMClient {
-  return new LLMClient();
-}
+// 3. 从现有配置创建
+const endpoint = { url: 'https://api.openai.com/v1', key: 'key', model: 'gpt-4' };
+const configFromEndpoint = createLLMConfigFromEndpoint(endpoint, {
+  temperature: 0.5,
+  tools: [] // 你的工具数组
+});
+*/
