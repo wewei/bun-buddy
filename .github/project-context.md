@@ -67,11 +67,7 @@ const validateConfig = (config: UserConfig): boolean => {
 };
 
 // ✅ Observable 使用示例
-const createCounter = (initial: number): Updatable<number> => {
-  return makeUpdatable((set) => initial);
-};
-
-const counter = createCounter(0);
+const counter = makeUpdatable(0);
 const doubled = mapOb(counter.observable, (x) => x * 2);
 const isValid = filterOb(doubled, (x) => x > 5);
 

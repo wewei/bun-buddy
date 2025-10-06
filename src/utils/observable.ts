@@ -203,22 +203,13 @@ export const makeObservable = <T>(
 };
 
 // 创建 Updatable
-export const makeUpdatable = <T>(
-  setup: (set: (value: T) => void) => T
-): Updatable<T> => {
-  let currentValue: T;
+export const makeUpdatable = <T>(initialValue: T): Updatable<T> => {
+  let currentValue: T = initialValue;
   const invalidators = new Set<Invalidate>();
 
   const invalidate: Invalidate = () => {
     invalidators.forEach(inv => inv());
   };
-
-  const set = (value: T): void => {
-    currentValue = value;
-    invalidate();
-  };
-
-  currentValue = setup(set);
 
   const observable: Observable<T> = (invalidate: Invalidate) => {
     invalidators.add(invalidate);

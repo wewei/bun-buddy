@@ -126,29 +126,21 @@ const setNestedValue = (obj: any, keyPath: string, value: any): void => {
 // 核心函数：创建 Updatable<Config>
 export const createUpdatableConfig = async (): Promise<Updatable<Config>> => {
   const initialConfig = await loadConfig();
-
-  return makeUpdatable((set: (config: Config) => void) => {
+  
+  const updatable = makeUpdatable(initialConfig);
+  
+  // 包装 update 方法，添加自动保存功能
+  const originalUpdate = updatable.update;
+  updatable.update = (updater: (currentValue: Config) => Config): void => {
+    originalUpdate(updater);
+    
     // 异步保存配置到文件
-    const saveConfigAsync = async (config: Config): Promise<void> => {
-      try {
-        await saveConfig(config);
-      } catch (error) {
-        console.warn('Failed to save config:', error);
-      }
-    };
+    saveConfig(updatable.observable(() => {})).catch(error => {
+      console.warn('Failed to save config:', error);
+    });
+  };
 
-    // 自定义的 set 函数，包含保存逻辑
-    const setWithSave = (config: Config): void => {
-      set(config);
-      saveConfigAsync(config);
-    };
-
-    // 返回一个包装的 updater，用于 update 方法
-    return {
-      ...initialConfig,
-      __setWithSave: setWithSave
-    } as Config & { __setWithSave: (config: Config) => void };
-  });
+  return updatable;
 };
 
 // 为了向后兼容，保留原来的函数名
