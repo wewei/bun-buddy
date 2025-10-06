@@ -128,7 +128,7 @@ const setNestedValue = (obj: any, keyPath: string, value: any): void => {
 export const createUpdatableConfig = async (): Promise<Updatable<Config>> => {
   const initialConfig = await loadConfig();
   
-  const updatable = makeUpdatable(initialConfig);
+  const { observable, update } = makeUpdatable(initialConfig);
   
   // 使用 B 组合子包装 update 方法，添加自动保存功能
   const withSave = (newConfig: Config): Config => {
@@ -141,13 +141,14 @@ export const createUpdatableConfig = async (): Promise<Updatable<Config>> => {
   };
   
   // B 组合子: B f g x = f(g x)
-  // 这里: f = withSave, g = updatable.update, x = updater
+  // 这里: f = withSave, g = update, x = updater
   // 类型: f: (Config) => Config, g: (updater) => Config
-  // 即: withSave(updatable.update(updater))
+  // 即: withSave(update(updater))
   // 先执行更新，然后用结果执行保存副作用，最后返回结果
-  updatable.update = $B(withSave)(updatable.update);
-
-  return updatable;
+  return {
+    observable,
+    update: $B(withSave)(update)
+  };
 };
 
 // 为了向后兼容，保留原来的函数名
