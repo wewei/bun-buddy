@@ -1,12 +1,12 @@
-import config from '../../config';
+import config from '../../config/userConfig';
 import { createChannel } from 'better-sse';
 import { handleSSEConnection } from './sseHandler';
 import { handlePostMessage } from './messageHandler';
 import { createResponse, createChatHistoryManager, initializeLLMConfig } from './utils';
 
 export async function createServer(host?: string, port?: number) {
-  const serviceHost = host || process.env.SERVICE_HOST || config.service.host;
-  const servicePort = port || parseInt(process.env.SERVICE_PORT || '') || config.service.port;
+  const serviceHost = host || process.env.SERVICE_HOST || config.server.host;
+  const servicePort = port || parseInt(process.env.SERVICE_PORT || '') || config.server.port;
 
   console.log(`🚀 Server running at http://${serviceHost}:${servicePort}`);
   console.log(`📋 SSE endpoint: http://${serviceHost}:${servicePort}/`);
