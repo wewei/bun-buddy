@@ -29,10 +29,19 @@ Bun Buddy 是一个通用的学习型 Agent，能够通过与用户的交流，�
 - 函数、变量名：`camelCase`
 - 类型名：`PascalCase`
 - 常量：`SNAKE_CASE`
+- 组合子：`$` 前缀（如 `$K`, `$S`, `$I`）
+- Observable 函数：`Ob` 后缀（如 `pureOb`, `bindOb`, `mapOb`）
 
 ### 函数长度
 - 单个函数不超过 50 行
 - 修改后检查函数长度，过长则进行逻辑提取和拆分
+
+### Observable Monadic 设计
+- **Observable 类型**: `Observable<T> = (invalidate: Invalidate) => T`
+- **核心操作**: `pureOb`, `bindOb`, `mapOb`, `joinOb`, `apOb`
+- **实用函数**: `lift2Ob`, `sequenceOb`, `filterOb`, `whenOb`, `zipOb`
+- **构造函数**: `makeObservable`, `makeUpdatable`
+- **组合子**: 使用 `$K`, `$S`, `$I`, `$B`, `$C`, `$W`, `$D`, `$E`, `$Y`
 
 ### 代码示例
 
@@ -56,6 +65,20 @@ const validateConfig = (config: UserConfig): boolean => {
   
   return true;
 };
+
+// ✅ Observable 使用示例
+const createCounter = (initial: number): Updatable<number> => {
+  return makeUpdatable((set) => initial);
+};
+
+const counter = createCounter(0);
+const doubled = mapOb(counter.observable, (x) => x * 2);
+const isValid = filterOb(doubled, (x) => x > 5);
+
+// ✅ 组合子使用示例
+const add = (a: number) => (b: number) => a + b;
+const add3 = $S($S($K(add))(3)); // 使用 S 组合子柯里化
+const result = add3(5); // 8
 
 // ✅ 常量定义
 const DEFAULT_SERVER_PORT = 3000;
@@ -81,7 +104,10 @@ src/
 ├── service/       # HTTP 服务
 │   ├── server.ts  # 服务器实现
 │   └── llm.ts     # LLM 集成
-└── config/        # 配置管理
+├── config/        # 配置管理
+└── utils/         # 通用工具库
+    ├── combinators.ts  # 函数式组合子
+    └── observable.ts   # Observable Monadic 实现
 ```
 
 ### 用户数据目录
