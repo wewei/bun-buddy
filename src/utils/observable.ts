@@ -6,7 +6,7 @@ export type Observable<T> = (invalidate: Invalidate) => T;
 
 export type Updatable<T> = {
   observable: Observable<T>;
-  update: (updater: (currentValue: T) => T) => void;
+  update: (updater: (currentValue: T) => T) => T;
 };
 
 // 导入基础组合子
@@ -216,9 +216,10 @@ export const makeUpdatable = <T>(initialValue: T): Updatable<T> => {
     return currentValue;
   };
 
-  const update = (updater: (currentValue: T) => T): void => {
+  const update = (updater: (currentValue: T) => T): T => {
     currentValue = updater(currentValue);
     invalidate();
+    return currentValue;
   };
 
   return {

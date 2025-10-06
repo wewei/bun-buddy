@@ -3,6 +3,7 @@ import { homedir } from 'os';
 import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'fs';
 import type { Observable, Updatable } from '../utils/observable';
 import { makeUpdatable } from '../utils/observable';
+import { $B } from '../utils/combinators';
 
 export type Endpoint = {
   url: string;
@@ -129,16 +130,22 @@ export const createUpdatableConfig = async (): Promise<Updatable<Config>> => {
   
   const updatable = makeUpdatable(initialConfig);
   
-  // 包装 update 方法，添加自动保存功能
-  const originalUpdate = updatable.update;
-  updatable.update = (updater: (currentValue: Config) => Config): void => {
-    originalUpdate(updater);
-    
-    // 异步保存配置到文件
-    saveConfig(updatable.observable(() => {})).catch(error => {
+  // 使用 B 组合子包装 update 方法，添加自动保存功能
+  const withSave = (newConfig: Config): Config => {
+    // 异步保存配置到文件（副作用）
+    saveConfig(newConfig).catch(error => {
       console.warn('Failed to save config:', error);
     });
+    // 返回原值（保持函数纯度）
+    return newConfig;
   };
+  
+  // B 组合子: B f g x = f(g x)
+  // 这里: f = withSave, g = updatable.update, x = updater
+  // 类型: f: (Config) => Config, g: (updater) => Config
+  // 即: withSave(updatable.update(updater))
+  // 先执行更新，然后用结果执行保存副作用，最后返回结果
+  updatable.update = $B(withSave)(updatable.update);
 
   return updatable;
 };
