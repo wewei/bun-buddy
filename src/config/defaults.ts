@@ -30,7 +30,5 @@ export const DEFAULT_CONFIG: Config = {
     },
     current: 'openai'
   },
-  cli: {
-    version: '1.0.0'
-  }
+  cli: {}
 };

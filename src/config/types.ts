@@ -13,7 +13,5 @@ export type Config = {
     endpoints: Record<string, Endpoint>;
     current: string;
   };
-  cli: {
-    version: string;
-  };
+  cli: {};
 };

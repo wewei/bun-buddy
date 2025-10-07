@@ -1,8 +1,6 @@
-import { merge } from 'lodash';
-import type { Observable, Updatable, Invalidate } from '../utils/observable';
+import type { Observable, Updatable } from '../utils/observable';
 import { makeUpdatable } from '../utils/observable';
 import type { Config } from './types';
-import { DEFAULT_CONFIG } from './defaults';
 import { userConfigManager } from './manager';
 import { $B } from '../utils/combinators';
 
