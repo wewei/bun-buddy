@@ -1,16 +1,13 @@
+import type { Config } from '../../config/types';
 import { configUpdatable } from '../../config';
 import { createChannel } from 'better-sse';
 import { handleSSEConnection } from './sseHandler';
 import { handlePostMessage } from './messageHandler';
 import { createResponse, createChatHistoryManager, initializeLLMConfig } from './utils';
 
-export async function createServer(host?: string, port?: number) {
-  // 获取当前配置值
-  const invalidate = () => {};
-  const currentConfig = configUpdatable.observable(invalidate);
-  
-  const serviceHost = host || process.env.SERVICE_HOST || currentConfig.server.host;
-  const servicePort = port || parseInt(process.env.SERVICE_PORT || '') || currentConfig.server.port;
+export async function createServer(config: Config) {
+  const serviceHost = process.env.SERVICE_HOST || config.server.host;
+  const servicePort = parseInt(process.env.SERVICE_PORT || '') || config.server.port;
 
   console.log(`🚀 Server running at http://${serviceHost}:${servicePort}`);
   console.log(`📋 SSE endpoint: http://${serviceHost}:${servicePort}/`);
@@ -60,17 +57,5 @@ export async function createServer(host?: string, port?: number) {
     }
   });
 
-  // Keep the process alive
-  process.on('SIGINT', () => {
-    console.log('\n🛑 Shutting down server gracefully...');
-    server.stop();
-    process.exit(0);
-  });
-
   return server;
-}
-
-// Auto-start when run directly (not in CLI mode)
-if (process.env.CLI_MODE !== 'true') {
-  createServer().catch(console.error);
 }
