@@ -1,7 +1,7 @@
 module.exports = {
   apps: [{
     name: 'bun-buddy-server',
-    script: 'src/service/server.ts',
+    script: 'src/service/index.ts',
     interpreter: 'bun',
     interpreter_args: 'run',
     instances: 1,

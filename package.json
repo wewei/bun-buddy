@@ -7,9 +7,8 @@
     "buddy": "./cli.ts"
   },
   "scripts": {
-    "start": "bun run index.ts",
-    "dev": "bun --watch index.ts",
-    "service": "bun run src/service/index.ts",
+    "start": "bun run src/service/index.ts",
+    "dev": "bun --watch src/service/index.ts",
     "cli": "bun run cli.ts",
     "test": "bun test",
     "test:watch": "bun test --watch"
