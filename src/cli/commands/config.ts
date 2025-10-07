@@ -1,6 +1,6 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
-import { userConfigManager } from '../../config/manager';
+import { getConfigValue, setConfigValue, loadConfig } from '../../config';
 
 export function createConfigCommands() {
   const configCmd = new Command('config')
@@ -13,7 +13,7 @@ export function createConfigCommands() {
     .action((keyPath?: string) => {
       try {
         if (keyPath) {
-          const value = userConfigManager.getConfigValue(keyPath);
+          const value = getConfigValue(keyPath);
           if (value !== undefined) {
             console.log(chalk.cyan(keyPath + ':'), value);
           } else {
@@ -21,7 +21,7 @@ export function createConfigCommands() {
             process.exit(1);
           }
         } else {
-          const config = userConfigManager.loadConfig();
+          const config = loadConfig();
           console.log(chalk.blue.bold('Current Configuration:'));
           console.log(JSON.stringify(config, null, 2));
         }
@@ -50,7 +50,7 @@ export function createConfigCommands() {
           parsedValue = false;
         }
 
-        userConfigManager.setConfigValue(keyPath, parsedValue);
+        setConfigValue(keyPath, parsedValue);
         console.log(chalk.green('Configuration updated:'), chalk.cyan(keyPath), '=', parsedValue);
       } catch (error) {
         console.error(chalk.red('Failed to set configuration:'), error);

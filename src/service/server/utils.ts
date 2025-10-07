@@ -32,11 +32,23 @@ export function createChatHistoryManager(): ChatHistoryManager {
 export function initializeLLMConfig(): ReturnType<typeof import('../llm').createLLMConfigFromEndpoint> | null {
   try {
     // Import config dynamically to avoid circular dependency
-    const config = require('../../config');
+    const { loadConfig } = require('../../config');
+    const config = loadConfig();
+    
+    // Validate config structure
+    if (!config || !config.llm || !config.llm.current || !config.llm.endpoints) {
+      console.log('⚠️ LLM Config not initialized - invalid config structure. Please check your configuration.');
+      return null;
+    }
     
     // Check if API key is configured
     const currentEndpoint = config.llm.current;
     const endpoint = config.llm.endpoints[currentEndpoint];
+    
+    if (!endpoint) {
+      console.log(`⚠️ LLM Config not initialized - endpoint '${currentEndpoint}' not found in config.`);
+      return null;
+    }
     
     if (endpoint && endpoint.key && endpoint.key.trim() !== '') {
       const { createLLMConfigFromEndpoint } = require('../llm');

@@ -2,14 +2,14 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import { createServerCommands, createConfigCommands, createListenCommand, createSendCommand } from './commands/';
-import config from '../config';
+import { configUpdatable, loadConfig } from '../config';
 
 const program = new Command();
 
 program
   .name('buddy')
   .description(chalk.blue.bold('� Bun Buddy - AI Agent toolkit built with Bun'))
-  .version(config.cli.version);
+  .version(loadConfig().cli.version);
 
 // Add server management commands
 program.addCommand(createServerCommands());

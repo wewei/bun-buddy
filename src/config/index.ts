@@ -11,8 +11,8 @@ const loadConfigFromFile = (): Config => {
   return userConfigManager.loadConfig();
 };
 
-// 核心函数：创建 Updatable<Config>
-export const createUpdatableConfig = (): Updatable<Config> => {
+// 全局唯一的配置 updatable 实例
+const createGlobalUpdatableConfig = (): Updatable<Config> => {
   let currentConfig = loadConfigFromFile();
   
   // 使用 makeUpdatable 构建基础的 updatable
@@ -70,11 +70,50 @@ export const createUpdatableConfig = (): Updatable<Config> => {
   };
 };
 
-// 为了向后兼容，保留原来的函数名
-export const createMutableConfig = createUpdatableConfig;
+// 创建全局唯一的配置 updatable 实例
+export const configUpdatable = createGlobalUpdatableConfig();
 
-// 导出默认配置实例（同步版本，用于向后兼容）
-export const config = userConfigManager.loadConfig();
+// 辅助函数：获取嵌套配置值
+const getNestedValue = (obj: any, keyPath: string): any => {
+  return keyPath.split('.').reduce((current, key) => {
+    return current && current[key] !== undefined ? current[key] : undefined;
+  }, obj);
+};
 
-export { userConfigManager };
-export default config;
+// 辅助函数：设置嵌套配置值
+const setNestedValue = (obj: any, keyPath: string, value: any): void => {
+  const keys = keyPath.split('.');
+  const lastKey = keys.pop()!;
+  
+  const target = keys.reduce((current, key) => {
+    if (!current[key] || typeof current[key] !== 'object') {
+      current[key] = {};
+    }
+    return current[key];
+  }, obj);
+
+  target[lastKey] = value;
+};
+
+// 配置操作函数
+export const getConfigValue = (keyPath: string): any => {
+  // 创建一个空的 invalidate 函数来获取当前值
+  const invalidate = () => {};
+  const currentConfig = configUpdatable.observable(invalidate);
+  return getNestedValue(currentConfig, keyPath);
+};
+
+export const setConfigValue = (keyPath: string, value: any): void => {
+  // 创建一个空的 invalidate 函数来获取当前值
+  const invalidate = () => {};
+  const currentConfig = configUpdatable.observable(invalidate);
+  
+  setNestedValue(currentConfig, keyPath, value);
+  configUpdatable.update(() => currentConfig);
+};
+
+export const loadConfig = (): any => {
+  // 创建一个空的 invalidate 函数来获取当前值
+  const invalidate = () => {};
+  return configUpdatable.observable(invalidate);
+};

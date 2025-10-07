@@ -1,5 +1,5 @@
 import { createServer } from './src/service/server';
-import config from './src/config';
+import { configUpdatable } from './src/config';
 
 async function main() {
   console.log('🦄 Bun Buddy - Starting in service mode...');

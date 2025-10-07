@@ -1,7 +1,7 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import { spinner } from '../utils';
-import { userConfigManager } from '../../config/manager';
+import { loadConfig } from '../../config';
 
 export function createListenCommand() {
   const listen = new Command('listen')
@@ -11,7 +11,7 @@ export function createListenCommand() {
       try {
         let serviceUrl = options.url;
         if (!serviceUrl) {
-          const userConfig = userConfigManager.loadConfig();
+          const userConfig = loadConfig();
           serviceUrl = `http://${userConfig.server.host}:${userConfig.server.port}`;
         }
 

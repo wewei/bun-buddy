@@ -1,5 +1,5 @@
 import pm2 from 'pm2';
-import { userConfigManager } from '../config/manager';
+import { loadConfig } from '../config';
 
 interface ServiceInfo {
   pid: number;
@@ -42,7 +42,7 @@ export class ServiceManager {
             }
           }
 
-          const userConfig = userConfigManager.loadConfig();
+          const userConfig = loadConfig();
           const serviceHost = host || userConfig.server.host;
           const servicePort = port || userConfig.server.port;
 
@@ -192,7 +192,7 @@ export class ServiceManager {
             return;
           }
 
-          const userConfig = userConfigManager.loadConfig();
+          const userConfig = loadConfig();
           const info: ServiceInfo = {
             pid: process.pid || 0,
             host: userConfig.server.host,
