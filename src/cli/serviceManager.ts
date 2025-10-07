@@ -1,5 +1,5 @@
 import pm2 from 'pm2';
-import { userConfigManager } from '../config/userConfig';
+import { userConfigManager } from '../config/manager';
 
 interface ServiceInfo {
   pid: number;

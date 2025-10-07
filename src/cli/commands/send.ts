@@ -1,7 +1,7 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import { spinner } from '../utils';
-import { userConfigManager } from '../../config/userConfig';
+import { userConfigManager } from '../../config/manager';
 
 export function createSendCommand() {
   const send = new Command('send')

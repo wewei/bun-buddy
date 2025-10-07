@@ -1,6 +1,6 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
-import { userConfigManager } from '../../config/userConfig';
+import { userConfigManager } from '../../config/manager';
 
 export function createConfigCommands() {
   const configCmd = new Command('config')

@@ -1,4 +1,4 @@
-import config from '../../config/userConfig';
+import config from '../../config';
 import { createChannel } from 'better-sse';
 import { handleSSEConnection } from './sseHandler';
 import { handlePostMessage } from './messageHandler';

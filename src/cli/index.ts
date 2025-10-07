@@ -2,7 +2,7 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import { createServerCommands, createConfigCommands, createListenCommand, createSendCommand } from './commands/';
-import config from '../config/userConfig';
+import config from '../config';
 
 const program = new Command();
 
