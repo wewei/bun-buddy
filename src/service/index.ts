@@ -30,7 +30,7 @@ async function restartServer() {
   };
   
   // 读取最新配置
-  const config = configUpdatable.observable(configInvalidate);
+  const config = configUpdatable.observe(configInvalidate);
   
   // 启动服务器
   await startServer(config);

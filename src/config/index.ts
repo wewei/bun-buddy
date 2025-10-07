@@ -42,12 +42,12 @@ const createGlobalUpdatableConfig = (): Updatable<Config> => {
   };
 
   // 使用 $B 包装 observable，添加 watch 启动逻辑
-  const observable: Observable<Config> = $B(
+  const observe = $B(
     (config: Config) => {
       startWatcher();
       return config;
     }
-  )(baseUpdatable.observable);
+  )(baseUpdatable.observe);
 
   // 使用 $B 包装 update 函数，添加 watch 停止和文件写入逻辑
   const update = $B(
@@ -63,7 +63,7 @@ const createGlobalUpdatableConfig = (): Updatable<Config> => {
   )(baseUpdatable.update);
   
   return {
-    observable,
+    observe,
     update
   };
 };
@@ -97,14 +97,14 @@ const setNestedValue = (obj: any, keyPath: string, value: any): void => {
 export const getConfigValue = (keyPath: string): any => {
   // 创建一个空的 invalidate 函数来获取当前值
   const invalidate = () => {};
-  const currentConfig = configUpdatable.observable(invalidate);
+  const currentConfig = configUpdatable.observe(invalidate);
   return getNestedValue(currentConfig, keyPath);
 };
 
 export const setConfigValue = (keyPath: string, value: any): void => {
   // 创建一个空的 invalidate 函数来获取当前值
   const invalidate = () => {};
-  const currentConfig = configUpdatable.observable(invalidate);
+  const currentConfig = configUpdatable.observe(invalidate);
   
   setNestedValue(currentConfig, keyPath, value);
   configUpdatable.update(() => currentConfig);
@@ -113,5 +113,5 @@ export const setConfigValue = (keyPath: string, value: any): void => {
 export const loadConfig = (): any => {
   // 创建一个空的 invalidate 函数来获取当前值
   const invalidate = () => {};
-  return configUpdatable.observable(invalidate);
+  return configUpdatable.observe(invalidate);
 };
