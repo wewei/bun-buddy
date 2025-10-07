@@ -28,7 +28,7 @@ describe('Observable Monad 基础操作', () => {
     test('应该创建包含给定值的 Observable', () => {
       const ob = pureOb(42);
       const noop = () => {};
-      expect(ob(noop)).toBe(42);
+      expect(ob.observe(noop)).toBe(42);
     });
 
     test('应该忽略 invalidate 回调', () => {
@@ -36,14 +36,14 @@ describe('Observable Monad 基础操作', () => {
       let called = false;
       const invalidate = () => { called = true; };
       
-      expect(ob(invalidate)).toBe('hello');
+      expect(ob.observe(invalidate)).toBe('hello');
       expect(called).toBe(false);
     });
 
     test('应该支持各种类型', () => {
-      expect(pureOb(null)(() => {})).toBe(null);
-      expect(pureOb({ x: 1 })(() => {})).toEqual({ x: 1 });
-      expect(pureOb([1, 2, 3])(() => {})).toEqual([1, 2, 3]);
+      expect(pureOb(null).observe(() => {})).toBe(null);
+      expect(pureOb({ x: 1 }).observe(() => {})).toEqual({ x: 1 });
+      expect(pureOb([1, 2, 3]).observe(() => {})).toEqual([1, 2, 3]);
     });
   });
 
@@ -53,19 +53,21 @@ describe('Observable Monad 基础操作', () => {
       const outer = pureOb(inner);
       const flattened = joinOb(outer);
       
-      expect(flattened(() => {})).toBe(42);
+      expect(flattened.observe(() => {})).toBe(42);
     });
 
     test('应该传递 invalidate 到内层', () => {
       let innerCalled = false;
-      const inner: Observable<number> = (invalidate) => {
-        innerCalled = true;
-        return 10;
+      const inner: Observable<number> = {
+        observe: (invalidate) => {
+          innerCalled = true;
+          return 10;
+        }
       };
       const outer = pureOb(inner);
       const flattened = joinOb(outer);
       
-      flattened(() => {});
+      flattened.observe(() => {});
       expect(innerCalled).toBe(true);
     });
   });
@@ -75,7 +77,7 @@ describe('Observable Monad 基础操作', () => {
       const ob = pureOb(5);
       const bound = bindOb(ob, (x) => pureOb(x * 2));
       
-      expect(bound(() => {})).toBe(10);
+      expect(bound.observe(() => {})).toBe(10);
     });
 
     test('应该支持链式绑定', () => {
@@ -85,18 +87,20 @@ describe('Observable Monad 基础操作', () => {
         (x) => pureOb(x * 2)
       );
       
-      expect(result(() => {})).toBe(8); // (3 + 1) * 2
+      expect(result.observe(() => {})).toBe(8); // (3 + 1) * 2
     });
 
     test('应该传递 invalidate', () => {
       let invalidateCalled = false;
-      const ob: Observable<number> = (invalidate) => {
-        invalidateCalled = true;
-        return 5;
+      const ob: Observable<number> = {
+        observe: (invalidate) => {
+          invalidateCalled = true;
+          return 5;
+        }
       };
       
       const bound = bindOb(ob, (x) => pureOb(x * 2));
-      bound(() => {});
+      bound.observe(() => {});
       
       expect(invalidateCalled).toBe(true);
     });
@@ -107,21 +111,21 @@ describe('Observable Monad 基础操作', () => {
       const ob = pureOb(5);
       const mapped = mapOb(ob, (x) => x * 2);
       
-      expect(mapped(() => {})).toBe(10);
+      expect(mapped.observe(() => {})).toBe(10);
     });
 
     test('应该支持类型转换', () => {
       const ob = pureOb(42);
       const mapped = mapOb(ob, (x) => x.toString());
       
-      expect(mapped(() => {})).toBe('42');
+      expect(mapped.observe(() => {})).toBe('42');
     });
 
     test('应该支持链式 map', () => {
       const ob = pureOb(3);
       const result = mapOb(mapOb(ob, x => x + 1), x => x * 2);
       
-      expect(result(() => {})).toBe(8);
+      expect(result.observe(() => {})).toBe(8);
     });
   });
 
@@ -131,7 +135,7 @@ describe('Observable Monad 基础操作', () => {
       const ob = pureOb(5);
       const result = apOb(fab, ob);
       
-      expect(result(() => {})).toBe(10);
+      expect(result.observe(() => {})).toBe(10);
     });
 
     test('应该处理复杂函数', () => {
@@ -139,7 +143,7 @@ describe('Observable Monad 基础操作', () => {
       const ob = pureOb('hello');
       const result = apOb(fab, ob);
       
-      expect(result(() => {})).toBe('HELLO');
+      expect(result.observe(() => {})).toBe('HELLO');
     });
   });
 });
@@ -152,7 +156,7 @@ describe('Observable 实用函数', () => {
       const ob2 = pureOb(4);
       const result = lift2Ob(add)(ob1, ob2);
       
-      expect(result(() => {})).toBe(7);
+      expect(result.observe(() => {})).toBe(7);
     });
 
     test('应该支持不同类型', () => {
@@ -161,7 +165,7 @@ describe('Observable 实用函数', () => {
       const ob2 = pureOb('world');
       const result = lift2Ob(concat)(ob1, ob2);
       
-      expect(result(() => {})).toBe('helloworld');
+      expect(result.observe(() => {})).toBe('helloworld');
     });
   });
 
@@ -173,7 +177,7 @@ describe('Observable 实用函数', () => {
       const ob3 = pureOb(3);
       const result = lift3Ob(add3)(ob1, ob2, ob3);
       
-      expect(result(() => {})).toBe(6);
+      expect(result.observe(() => {})).toBe(6);
     });
   });
 
@@ -182,19 +186,19 @@ describe('Observable 实用函数', () => {
       const observables = [pureOb(1), pureOb(2), pureOb(3)];
       const result = sequenceOb(observables);
       
-      expect(result(() => {})).toEqual([1, 2, 3]);
+      expect(result.observe(() => {})).toEqual([1, 2, 3]);
     });
 
     test('应该处理空数组', () => {
       const result = sequenceOb([]);
-      expect(result(() => {})).toEqual([]);
+      expect(result.observe(() => {})).toEqual([]);
     });
 
     test('应该保持顺序', () => {
       const obs = [pureOb('a'), pureOb('b'), pureOb('c')];
       const result = sequenceOb(obs);
       
-      expect(result(() => {})).toEqual(['a', 'b', 'c']);
+      expect(result.observe(() => {})).toEqual(['a', 'b', 'c']);
     });
   });
 
@@ -203,14 +207,14 @@ describe('Observable 实用函数', () => {
       const f = (x: number) => pureOb(x * 2);
       const result = traverseOb(f)([1, 2, 3]);
       
-      expect(result(() => {})).toEqual([2, 4, 6]);
+      expect(result.observe(() => {})).toEqual([2, 4, 6]);
     });
 
     test('应该处理空数组', () => {
       const f = (x: number) => pureOb(x * 2);
       const result = traverseOb(f)([]);
       
-      expect(result(() => {})).toEqual([]);
+      expect(result.observe(() => {})).toEqual([]);
     });
   });
 
@@ -219,14 +223,14 @@ describe('Observable 实用函数', () => {
       const ob = pureOb(5);
       const filtered = filterOb(ob, (x) => x > 3);
       
-      expect(filtered(() => {})).toBe(5);
+      expect(filtered.observe(() => {})).toBe(5);
     });
 
     test('应该过滤不满足条件的值', () => {
       const ob = pureOb(2);
       const filtered = filterOb(ob, (x) => x > 3);
       
-      expect(filtered(() => {})).toBe(undefined);
+      expect(filtered.observe(() => {})).toBe(undefined);
     });
   });
 
@@ -236,7 +240,7 @@ describe('Observable 实用函数', () => {
       const ob = pureOb(42);
       const result = whenOb(condition, ob);
       
-      expect(result(() => {})).toBe(42);
+      expect(result.observe(() => {})).toBe(42);
     });
 
     test('条件为 false 时应该返回 undefined', () => {
@@ -244,7 +248,7 @@ describe('Observable 实用函数', () => {
       const ob = pureOb(42);
       const result = whenOb(condition, ob);
       
-      expect(result(() => {})).toBe(undefined);
+      expect(result.observe(() => {})).toBe(undefined);
     });
   });
 
@@ -254,7 +258,7 @@ describe('Observable 实用函数', () => {
       const ob = pureOb(42);
       const result = unlessOb(condition, ob);
       
-      expect(result(() => {})).toBe(42);
+      expect(result.observe(() => {})).toBe(42);
     });
 
     test('条件为 true 时应该返回 undefined', () => {
@@ -262,7 +266,7 @@ describe('Observable 实用函数', () => {
       const ob = pureOb(42);
       const result = unlessOb(condition, ob);
       
-      expect(result(() => {})).toBe(undefined);
+      expect(result.observe(() => {})).toBe(undefined);
     });
   });
 
@@ -272,7 +276,7 @@ describe('Observable 实用函数', () => {
       const ob2 = pureOb('a');
       const result = zipOb(ob1, ob2);
       
-      expect(result(() => {})).toEqual([1, 'a']);
+      expect(result.observe(() => {})).toEqual([1, 'a']);
     });
   });
 
@@ -283,7 +287,7 @@ describe('Observable 实用函数', () => {
       const ob2 = pureOb(4);
       const result = zipWithOb(add, ob1, ob2);
       
-      expect(result(() => {})).toBe(7);
+      expect(result.observe(() => {})).toBe(7);
     });
   });
 });
@@ -291,12 +295,14 @@ describe('Observable 实用函数', () => {
 describe('Observable 错误处理', () => {
   describe('catchOb - 错误捕获', () => {
     test('应该捕获错误并恢复', () => {
-      const errorOb: Observable<number> = () => {
-        throw new Error('Test error');
+      const errorOb: Observable<number> = {
+        observe: () => {
+          throw new Error('Test error');
+        }
       };
       
       const recovered = catchOb(errorOb, (_error) => pureOb(0));
-      expect(recovered(() => {})).toBe(0);
+      expect(recovered.observe(() => {})).toBe(0);
     });
 
     test('正常值不应触发错误处理', () => {
@@ -308,26 +314,28 @@ describe('Observable 错误处理', () => {
         return pureOb(0);
       });
       
-      expect(result(() => {})).toBe(42);
+      expect(result.observe(() => {})).toBe(42);
       expect(handlerCalled).toBe(false);
     });
   });
 
   describe('recoverOb - 错误恢复', () => {
     test('应该用默认值恢复错误', () => {
-      const errorOb: Observable<number> = () => {
-        throw new Error('Test error');
+      const errorOb: Observable<number> = {
+        observe: () => {
+          throw new Error('Test error');
+        }
       };
       
       const recovered = recoverOb(errorOb, 999);
-      expect(recovered(() => {})).toBe(999);
+      expect(recovered.observe(() => {})).toBe(999);
     });
 
     test('正常值不应被替换', () => {
       const normalOb = pureOb(42);
       const recovered = recoverOb(normalOb, 999);
       
-      expect(recovered(() => {})).toBe(42);
+      expect(recovered.observe(() => {})).toBe(42);
     });
   });
 });
@@ -336,16 +344,18 @@ describe('Observable 时间控制', () => {
   describe('throttleOb - 节流', () => {
     test('应该限制调用频率', () => {
       let callCount = 0;
-      const ob: Observable<number> = () => {
-        callCount++;
-        return callCount;
+      const ob: Observable<number> = {
+        observe: () => {
+          callCount++;
+          return callCount;
+        }
       };
       
       const throttled = throttleOb(ob, 100);
       const noop = () => {};
       
-      const val1 = throttled(noop);
-      const val2 = throttled(noop);
+      const val1 = throttled.observe(noop);
+      const val2 = throttled.observe(noop);
       
       expect(val1).toBe(1);
       expect(val2).toBe(1); // 应该返回缓存值
@@ -361,7 +371,7 @@ describe('Observable 时间控制', () => {
       let invalidateCalled = false;
       const invalidate = () => { invalidateCalled = true; };
       
-      const result = debounced(invalidate);
+      const result = debounced.observe(invalidate);
       
       expect(result).toBe(42);
       expect(invalidateCalled).toBe(false);
@@ -379,11 +389,11 @@ describe('Observable 创建函数', () => {
         return 0;
       });
       
-      let currentValue = ob(() => {});
+      let currentValue = ob.observe(() => {});
       expect(currentValue).toBe(0);
       
       setter!(42);
-      currentValue = ob(() => {});
+      currentValue = ob.observe(() => {});
       expect(currentValue).toBe(42);
     });
 
@@ -397,7 +407,7 @@ describe('Observable 创建函数', () => {
       });
       
       const invalidate = () => { invalidateCalled = true; };
-      ob(invalidate);
+      ob.observe(invalidate);
       
       setter!(10);
       expect(invalidateCalled).toBe(true);
@@ -458,7 +468,7 @@ describe('Observable Monad 法则', () => {
       const left = bindOb(pureOb(a), f);
       const right = f(a);
       
-      expect(left(() => {})).toBe(right(() => {}));
+      expect(left.observe(() => {})).toBe(right.observe(() => {}));
     });
   });
 
@@ -467,7 +477,7 @@ describe('Observable Monad 法则', () => {
       const m = pureOb(42);
       const bound = bindOb(m, pureOb);
       
-      expect(bound(() => {})).toBe(m(() => {}));
+      expect(bound.observe(() => {})).toBe(m.observe(() => {}));
     });
   });
 
@@ -480,7 +490,7 @@ describe('Observable Monad 法则', () => {
       const left = bindOb(bindOb(m, f), g);
       const right = bindOb(m, x => bindOb(f(x), g));
       
-      expect(left(() => {})).toBe(right(() => {}));
+      expect(left.observe(() => {})).toBe(right.observe(() => {}));
     });
   });
 
@@ -489,7 +499,7 @@ describe('Observable Monad 法则', () => {
       const ob = pureOb(42);
       const mapped = mapOb(ob, x => x);
       
-      expect(mapped(() => {})).toBe(ob(() => {}));
+      expect(mapped.observe(() => {})).toBe(ob.observe(() => {}));
     });
 
     test('fmap (f . g) ≡ fmap f . fmap g', () => {
@@ -500,7 +510,7 @@ describe('Observable Monad 法则', () => {
       const left = mapOb(ob, x => f(g(x)));
       const right = mapOb(mapOb(ob, g), f);
       
-      expect(left(() => {})).toBe(right(() => {}));
+      expect(left.observe(() => {})).toBe(right.observe(() => {}));
     });
   });
 });

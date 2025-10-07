@@ -2,10 +2,11 @@
 
 export type Invalidate = () => void;
 
-export type Observable<T> = (invalidate: Invalidate) => T;
+export type Observable<T> = {
+  observe: (invalidate: Invalidate) => T;
+};
 
-export type Updatable<T> = {
-  observable: Observable<T>;
+export type Updatable<T> = Observable<T> & {
   update: (updater: (currentValue: T) => T) => T;
 };
 
@@ -15,19 +16,22 @@ import { $K, $W } from './combinators';
 // ============ Observable Monadic 函数 ============
 
 // pureOb - pure/return 操作
-export const pureOb = <T>(value: T): Observable<T> =>
-  $K(value);
+export const pureOb = <T>(value: T): Observable<T> => ({
+  observe: $K(value)
+});
 
 // joinOb - join 操作
-export const joinOb = <T>(mmv: Observable<Observable<T>>): Observable<T> =>
-  $W(mmv);
+export const joinOb = <T>(mmv: Observable<Observable<T>>): Observable<T> => ({
+  observe: (invalidate: Invalidate) => mmv.observe(invalidate).observe(invalidate)
+});
 
 // bindOb - bind (>>=) 操作
 export const bindOb = <T, U>(
   ob: Observable<T>,
   f: (value: T) => Observable<U>
-): Observable<U> =>
-  (invalidate: Invalidate) => f(ob(invalidate))(invalidate);
+): Observable<U> => ({
+  observe: (invalidate: Invalidate) => f(ob.observe(invalidate)).observe(invalidate)
+});
 
 // mapOb - map (fmap) 操作
 export const mapOb = <T, U>(
@@ -40,8 +44,9 @@ export const mapOb = <T, U>(
 export const apOb = <T, U>(
   fab: Observable<(value: T) => U>,
   ob: Observable<T>
-): Observable<U> =>
-  (invalidate: Invalidate) => fab(invalidate)(ob(invalidate));
+): Observable<U> => ({
+  observe: (invalidate: Invalidate) => fab.observe(invalidate)(ob.observe(invalidate))
+});
 
 // ============ 实用 Observable 函数 ============
 
@@ -126,14 +131,15 @@ export const zipWithOb = <A, B, C>(
 export const catchOb = <T, E>(
   ob: Observable<T>,
   handler: (error: E) => Observable<T>
-): Observable<T> =>
-  (invalidate: Invalidate) => {
+): Observable<T> => ({
+  observe: (invalidate: Invalidate) => {
     try {
-      return ob(invalidate);
+      return ob.observe(invalidate);
     } catch (error) {
-      return handler(error as E)(invalidate);
+      return handler(error as E).observe(invalidate);
     }
-  };
+  }
+});
 
 // recoverOb - 从错误中恢复
 export const recoverOb = <T>(
@@ -150,13 +156,15 @@ export const throttleOb = <T>(
   let lastTime = 0;
   let lastValue: T;
   
-  return (invalidate: Invalidate) => {
-    const now = Date.now();
-    if (now - lastTime >= ms) {
-      lastTime = now;
-      lastValue = ob(invalidate);
+  return {
+    observe: (invalidate: Invalidate) => {
+      const now = Date.now();
+      if (now - lastTime >= ms) {
+        lastTime = now;
+        lastValue = ob.observe(invalidate);
+      }
+      return lastValue!;
     }
-    return lastValue!;
   };
 };
 
@@ -167,12 +175,14 @@ export const debounceOb = <T>(
 ): Observable<T> => {
   let timeoutId: NodeJS.Timeout;
   
-  return (invalidate: Invalidate) => {
-    clearTimeout(timeoutId);
-    timeoutId = setTimeout(() => {
-      invalidate();
-    }, ms);
-    return ob(invalidate);
+  return {
+    observe: (invalidate: Invalidate) => {
+      clearTimeout(timeoutId);
+      timeoutId = setTimeout(() => {
+        invalidate();
+      }, ms);
+      return ob.observe(invalidate);
+    }
   };
 };
 
@@ -196,9 +206,11 @@ export const makeObservable = <T>(
 
   currentValue = setup(set);
 
-  return (invalidate: Invalidate) => {
-    invalidators.add(invalidate);
-    return currentValue;
+  return {
+    observe: (invalidate: Invalidate) => {
+      invalidators.add(invalidate);
+      return currentValue;
+    }
   };
 };
 
@@ -211,11 +223,6 @@ export const makeUpdatable = <T>(initialValue: T): Updatable<T> => {
     invalidators.forEach(inv => inv());
   };
 
-  const observable: Observable<T> = (invalidate: Invalidate) => {
-    invalidators.add(invalidate);
-    return currentValue;
-  };
-
   const update = (updater: (currentValue: T) => T): T => {
     currentValue = updater(currentValue);
     invalidate();
@@ -223,7 +230,10 @@ export const makeUpdatable = <T>(initialValue: T): Updatable<T> => {
   };
 
   return {
-    observable,
+    observe: (invalidate: Invalidate) => {
+      invalidators.add(invalidate);
+      return currentValue;
+    },
     update
   };
 };
