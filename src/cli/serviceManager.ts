@@ -205,16 +205,31 @@ export class ServiceManager {
 
           // Check health by accessing the root SSE endpoint
           try {
+            // Create an AbortController to cancel the request after checking headers
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 1000);
+            
             const response = await fetch(`http://${info.host}:${info.port}/`, {
-              signal: AbortSignal.timeout(3000) // 3 second timeout
+              signal: controller.signal
             });
+            
+            // Check if response is healthy (SSE endpoint)
             const isHealthy = response.ok && response.headers.get('content-type')?.includes('text/event-stream');
+            
+            // Immediately abort the connection after checking headers
+            clearTimeout(timeoutId);
+            controller.abort();
+            
             resolve({
               isRunning: true,
               info,
               healthy: isHealthy
             });
-          } catch {
+          } catch (error) {
+            // Ignore abort errors (expected), only log other errors
+            if (error instanceof Error && error.name !== 'AbortError') {
+              console.debug('Health check failed:', error.message);
+            }
             resolve({
               isRunning: true,
               info,

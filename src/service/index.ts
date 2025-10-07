@@ -63,7 +63,9 @@ process.on('SIGTERM', async () => {
   process.exit(0);
 });
 
-// Only run if this file is executed directly
-if (import.meta.main) {
+// Only run if not in CLI mode
+// When CLI_MODE is 'true', the CLI is being used and we shouldn't start the service
+// When CLI_MODE is 'false' or unset, we should start the service
+if (process.env.CLI_MODE !== 'true') {
   main();
 }
