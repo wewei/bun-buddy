@@ -210,7 +210,7 @@ export class ServiceManager {
           });
         });
       }),
-      3000,
+      1000,
       { isRunning: false }
     );
   }
