@@ -1,4 +1,4 @@
-import type { ChatMessage } from '../llm';
+import type { ChatMessage } from '../agent/llm';
 
 export type ApiResponse<T = any> = {
   success: boolean;

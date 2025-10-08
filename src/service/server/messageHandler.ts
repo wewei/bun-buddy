@@ -4,7 +4,7 @@ import {
   type CompletionChunk,
   generateTrackingId,
   withCallback
-} from '../llm';
+} from '../agent/llm';
 import type { HandlePostMessage } from './types';
 
 // Handle POST message

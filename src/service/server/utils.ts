@@ -1,4 +1,4 @@
-import type { ChatMessage } from '../llm';
+import type { ChatMessage } from '../agent/llm';
 import type { ApiResponse, ChatHistoryManager } from './types';
 
 // Utility function to create API responses
@@ -29,7 +29,7 @@ export function createChatHistoryManager(): ChatHistoryManager {
 }
 
 // Initialize LLM configuration
-export function initializeLLMConfig(): ReturnType<typeof import('../llm').createLLMConfigFromEndpoint> | null {
+export function initializeLLMConfig(): ReturnType<typeof import('../agent/llm').createLLMConfigFromEndpoint> | null {
   try {
     // Import config dynamically to avoid circular dependency
     const { loadConfig } = require('../../config');
@@ -51,7 +51,7 @@ export function initializeLLMConfig(): ReturnType<typeof import('../llm').create
     }
     
     if (endpoint && endpoint.key && endpoint.key.trim() !== '') {
-      const { createLLMConfigFromEndpoint } = require('../llm');
+      const { createLLMConfigFromEndpoint } = require('../agent/llm');
       const llmConfig = createLLMConfigFromEndpoint(endpoint, {
         temperature: 0.7,
         maxTokens: 2000
