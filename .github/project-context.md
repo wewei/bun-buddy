@@ -36,6 +36,14 @@ Bun Buddy 是一个通用的学习型 Agent，能够通过与用户的交流，�
 - 单个函数不超过 50 行
 - 修改后检查函数长度，过长则进行逻辑提取和拆分
 
+### 导入规范
+- 所有的 `import` 和 `import type` 语句必须写在文件头部
+- 禁止使用 inline import（如在函数内部动态 import）
+- 按以下顺序组织导入：
+  1. 外部依赖（第三方库）
+  2. 内部模块（项目内部）
+  3. 类型导入（使用 `import type`）
+
 ### Observable Monadic 设计
 - **Observable 类型**: `Observable<T> = (invalidate: Invalidate) => T`
 - **核心操作**: `pureOb`, `bindOb`, `mapOb`, `joinOb`, `apOb`
