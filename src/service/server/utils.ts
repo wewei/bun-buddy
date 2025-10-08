@@ -1,18 +1,23 @@
+import { loadConfig } from '../../config';
+import { createLLMConfigFromEndpoint } from '../agent/llm';
+
 import type { ChatMessage } from '../agent/llm';
 import type { ApiResponse, ChatHistoryManager } from './types';
 
 // Utility function to create API responses
-export function createResponse<T>(success: boolean, data?: T, message?: string): ApiResponse<T> {
-  return {
-    success,
-    data,
-    message,
-    timestamp: new Date().toISOString()
-  };
-}
+export const createResponse = <T>(
+  success: boolean,
+  data?: T,
+  message?: string
+): ApiResponse<T> => ({
+  success,
+  data,
+  message,
+  timestamp: new Date().toISOString()
+});
 
 // Create chat history manager
-export function createChatHistoryManager(): ChatHistoryManager {
+export const createChatHistoryManager = (): ChatHistoryManager => {
   const chatHistory: ChatMessage[] = [];
   
   return {
@@ -26,17 +31,15 @@ export function createChatHistoryManager(): ChatHistoryManager {
       return chatHistory.slice(-limit);
     }
   };
-}
+};
 
 // Initialize LLM configuration
-export function initializeLLMConfig(): ReturnType<typeof import('../agent/llm').createLLMConfigFromEndpoint> | null {
+export const initializeLLMConfig = (): ReturnType<typeof createLLMConfigFromEndpoint> | null => {
   try {
-    // Import config dynamically to avoid circular dependency
-    const { loadConfig } = require('../../config');
     const config = loadConfig();
     
     // Validate config structure
-    if (!config || !config.llm || !config.llm.current || !config.llm.endpoints) {
+    if (!config?.llm?.current || !config.llm.endpoints) {
       console.log('⚠️ LLM Config not initialized - invalid config structure. Please check your configuration.');
       return null;
     }
@@ -50,20 +53,19 @@ export function initializeLLMConfig(): ReturnType<typeof import('../agent/llm').
       return null;
     }
     
-    if (endpoint && endpoint.key && endpoint.key.trim() !== '') {
-      const { createLLMConfigFromEndpoint } = require('../agent/llm');
+    if (endpoint?.key?.trim()) {
       const llmConfig = createLLMConfigFromEndpoint(endpoint, {
         temperature: 0.7,
         maxTokens: 2000
       });
       console.log(`🤖 LLM Config initialized successfully with endpoint: ${currentEndpoint}`);
       return llmConfig;
-    } else {
-      console.log('⚠️ LLM Config not initialized - API key not configured. Set up .env file with API keys to enable LLM features.');
-      return null;
     }
+    
+    console.log('⚠️ LLM Config not initialized - API key not configured. Set up .env file with API keys to enable LLM features.');
+    return null;
   } catch (error) {
     console.warn('⚠️ LLM Config initialization failed:', error);
     return null;
   }
-}
+};

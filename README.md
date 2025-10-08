@@ -114,6 +114,18 @@ bun install
 bun run index.ts
 ```
 
+### 代码质量检查
+```bash
+# 运行 ESLint 检查
+bun run lint
+
+# 自动修复可修复的问题
+bun run lint:fix
+
+# 运行测试
+bun test
+```
+
 ### 使用 buddy 命令
 ```bash
 # 服务管理
@@ -145,11 +157,23 @@ buddy connect http://remote-server:3000  # 连接到远程服务
 - [ ] 完善 SSE 实时通信
 - [ ] 添加测试覆盖
 
-## �🛠️ 技术栈
+## 🛠️ 技术栈
 
 - **Runtime**: [Bun](https://bun.sh) - 快速的 JavaScript 运行时
 - **Language**: TypeScript
 - **Architecture**: HTTP Service + CLI Tool
+- **Code Quality**: ESLint + TypeScript ESLint
+- **Dependencies**: commander, chalk, blessed, openai, better-sse, pm2
+
+## 📖 开发规范
+
+项目遵循严格的编码规范，详见 `.github/project-context.md`：
+
+- ✅ 函数式编程风格（不使用 class 和 interface）
+- ✅ 使用 `type` 定义数据类型
+- ✅ 函数长度不超过 50 行
+- ✅ 所有 import 语句必须在文件头部
+- ✅ 按照规定顺序组织导入：外部依赖 → 内部模块 → 类型导入
 
 ## 📄 许可证
 
