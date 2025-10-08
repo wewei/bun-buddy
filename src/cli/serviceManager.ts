@@ -14,7 +14,6 @@ interface ServiceInfo {
 interface ServiceStatus {
   isRunning: boolean;
   info?: ServiceInfo;
-  healthy?: boolean;
 }
 
 export class ServiceManager {
@@ -169,76 +168,62 @@ export class ServiceManager {
   }
 
   async getServiceStatus(): Promise<ServiceStatus> {
-    return new Promise((resolve) => {
-      pm2.connect((err) => {
-        if (err) {
-          resolve({ isRunning: false });
-          return;
-        }
-
-        pm2.describe(this.appName, async (err, processes) => {
-          pm2.disconnect();
-          
-          if (err || !processes || !processes.length) {
+    return this.withTimeout(
+      new Promise((resolve) => {
+        pm2.connect((err) => {
+          if (err) {
             resolve({ isRunning: false });
             return;
           }
 
-          const process = processes[0];
-          const isOnline = process?.pm2_env?.status === 'online';
-          
-          if (!isOnline) {
-            resolve({ isRunning: false });
-            return;
-          }
-
-          const userConfig = loadConfig();
-          const info: ServiceInfo = {
-            pid: process.pid || 0,
-            host: userConfig.server.host,
-            port: userConfig.server.port,
-            startTime: new Date((process.pm2_env as any)?.created_at || Date.now()).toISOString(),
-            status: process.pm2_env?.status || 'unknown',
-            memory: process.monit?.memory,
-            cpu: process.monit?.cpu
-          };
-
-          // Check health by accessing the root SSE endpoint
-          try {
-            // Create an AbortController to cancel the request after checking headers
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 1000);
+          pm2.describe(this.appName, (err, processes) => {
+            pm2.disconnect();
             
-            const response = await fetch(`http://${info.host}:${info.port}/`, {
-              signal: controller.signal
-            });
-            
-            // Check if response is healthy (SSE endpoint)
-            const isHealthy = response.ok && response.headers.get('content-type')?.includes('text/event-stream');
-            
-            // Immediately abort the connection after checking headers
-            clearTimeout(timeoutId);
-            controller.abort();
-            
-            resolve({
-              isRunning: true,
-              info,
-              healthy: isHealthy
-            });
-          } catch (error) {
-            // Ignore abort errors (expected), only log other errors
-            if (error instanceof Error && error.name !== 'AbortError') {
-              console.debug('Health check failed:', error.message);
+            if (err || !processes || !processes.length) {
+              resolve({ isRunning: false });
+              return;
             }
+
+            const process = processes[0];
+            const isOnline = process?.pm2_env?.status === 'online';
+            
+            if (!isOnline) {
+              resolve({ isRunning: false });
+              return;
+            }
+
+            const userConfig = loadConfig();
+            const info: ServiceInfo = {
+              pid: process.pid || 0,
+              host: userConfig.server.host,
+              port: userConfig.server.port,
+              startTime: new Date((process.pm2_env as any)?.created_at || Date.now()).toISOString(),
+              status: process.pm2_env?.status || 'unknown',
+              memory: process.monit?.memory,
+              cpu: process.monit?.cpu
+            };
+
             resolve({
               isRunning: true,
-              info,
-              healthy: false
+              info
             });
-          }
+          });
         });
-      });
-    });
+      }),
+      3000,
+      { isRunning: false }
+    );
+  }
+
+  private async withTimeout<T>(
+    promise: Promise<T>,
+    timeoutMs: number,
+    fallback: T
+  ): Promise<T> {
+    return Promise.race([
+      promise,
+      new Promise<T>((resolve) => setTimeout(() => resolve(fallback), timeoutMs))
+    ]);
   }
 }
 

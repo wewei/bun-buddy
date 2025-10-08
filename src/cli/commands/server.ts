@@ -50,11 +50,7 @@ export function createServerCommands() {
         const status = await serviceManager.getServiceStatus();
         
         if (status.isRunning && status.info) {
-          if (status.healthy) {
-            spin.succeed(chalk.green('Service is running and healthy'));
-          } else {
-            spin.warn(chalk.yellow('Service is running but not responding'));
-          }
+          spin.succeed(chalk.green('Service is running'));
           
           console.log(chalk.cyan('PID:'), status.info.pid);
           console.log(chalk.cyan('Host:'), status.info.host);
