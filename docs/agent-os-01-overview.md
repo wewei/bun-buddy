@@ -25,15 +25,15 @@ Unlike traditional layered architectures, Agent OS uses a **bus-based architectu
                   ▲         ▲         ▲         ▲
       ┌───────────┘         │         │         └──────────┐
       │                     │         │                    │
-┌─────▼──────┐  ┌───────────▼──┐  ┌──▼────────┐  ┌────────▼─────┐
-│   Task     │  │    Model     │  │  Memory   │  │  Bus Ctrl    │
-│  Manager   │  │   Manager    │  │  (Store)  │  │ (Discovery)  │
-├────────────┤  ├──────────────┤  ├───────────┤  ├──────────────┤
-│task:spawn  │  │model:llm     │  │mem:save   │  │bus:list      │
-│task:list   │  │model:embed   │  │mem:query  │  │bus:schema    │
-│task:kill   │  │model:list    │  │mem:archive│  │bus:inspect   │
-└────────────┘  └──────────────┘  └───────────┘  └──────────────┘
-    ▲ Below Bus: Both call and register abilities
+┌─────▼──────┐  ┌───────────▼──┐   ┌──▼────────┐  ┌────────▼─────┐
+│   Task     │  │    Model     │   │  Memory   │  │  Bus Ctrl    │
+│  Manager   │  │   Manager    │   │  (Store)  │  │ (Discovery)  │
+├────────────┤  ├──────────────┤   ├───────────┤  ├──────────────┤
+│task:spawn  │  │model:llm     │   │mem:save   │  │bus:list      │
+│task:list   │  │model:embed   │   │mem:query  │  │bus:schema    │
+│task:kill   │  │model:list    │   │mem:archive│  │bus:inspect   │
+└────────────┘  └──────────────┘   └───────────┘  └──────────────┘
+      ▲ Below Bus: Both call and register abilities
 ```
 
 ### Terminology
