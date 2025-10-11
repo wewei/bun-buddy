@@ -2,82 +2,212 @@
 
 ## Overview
 
-The **Task Manager** is the process management layer of Agent OS. Like an operating system's process scheduler, it manages the lifecycle of concurrent tasks, maintains isolated contexts, and routes messages to the appropriate task.
+The **Task Manager** is the process management layer of Agent OS. It manages the lifecycle of tasks—from creation through execution to completion—with a **persistence-first architecture**. Unlike traditional in-memory execution models, every aspect of task execution (tasks, ability calls, messages) is continuously persisted to the Memory module, enabling full recovery from unexpected failures.
 
-Task Manager sits **below the Agent Bus**: it both invokes bus abilities (e.g., `model:llm`, `mem:retrieve`) and registers its own abilities (e.g., `task:spawn`, `task:send`).
+Task Manager sits **below the Agent Bus**: it both invokes bus abilities (e.g., `model:llm`, `mem:task:save`) and registers its own lifecycle management abilities (e.g., `task:route`, `task:create`, `task:cancel`).
+
+### Key Design Principles
+
+**Persistence-First**: A task in Agent OS represents an Agent's series of conversations with an LLM to achieve a specific goal. The entire execution process is continuously persisted to Memory. If the Agent process crashes, it can resume and continue unfinished tasks upon restart based on persisted records.
+
+**Clear Separation of Concerns**:
+- **Task Manager**: Core lifecycle operations (routing, creation, cancellation, listing active tasks)
+- **Memory Module**: Persistent storage and detailed queries (task details, call history, message records)
+
+This separation enables Task Manager to remain lightweight and stateless, while Memory provides durable storage and rich querying capabilities.
 
 ## Core Concepts
 
-### Task
+### Three Core Entities
 
-A **Task** represents a goal-directed execution unit with its own isolated context:
+Task execution is represented through three types of entities, all persisted in Memory:
+
+#### Task Entity
+
+Represents a goal-directed execution unit:
 
 ```typescript
 type Task = {
-  id: string;                           // Unique task ID
-  goal: string;                         // Original task goal
-  status: TaskStatus;
-  context: ChatMessage[];               // Complete message history
-  parentTaskId?: string;                // Parent task (for subtasks)
-  createdAt: number;
-  updatedAt: number;
-  completedAt?: number;
-  
-  metadata: {
-    iterationCount: number;             // Number of LLM iterations
-    lastMessageAt?: number;             // Last user message time
-    totalTokens?: number;               // Cumulative token usage
-  };
+  id: string;                    // Global unique identifier
+  parentTaskId?: string;         // Parent task ID (for subtasks)
+  completionStatus?: string;     // Undefined = in progress
+                                 // String value = completed
+                                 // Values: 'success' | 'cancelled' | 'failed' | error message
+  systemPrompt: string;          // Task-specific system instructions
+  createdAt: number;             // Task creation timestamp
+  updatedAt: number;             // Last status change timestamp
+};
+```
+
+**Completion Status**:
+- `undefined`: Task is in progress
+- `'success'`: Task completed successfully
+- `'cancelled'`: Task was cancelled by user
+- `'failed'`: Task failed (generic failure)
+- Custom error message: Task failed with specific reason
+
+#### Call Entity
+
+Represents an ability invocation during task execution:
+
+```typescript
+type Call = {
+  id: string;                    // Unique call identifier
+  taskId: string;                // Task this call belongs to
+  abilityName: string;           // Ability ID (e.g., 'mem:retrieve')
+  parameters: string;            // JSON-encoded parameters
+  status: CallStatus;            // Call execution status
+  details: string;               // JSON-encoded details for recovery or result
+  createdAt: number;             // Call initiation timestamp
+  updatedAt: number;             // Last status/details change timestamp
+  startMessageId: string;        // Message announcing call initiation
+  endMessageId?: string;         // Message announcing call completion
 };
 
-type TaskStatus = 
-  | 'pending'                           // Created, not yet started
-  | 'running'                           // Currently executing
-  | 'waiting'                           // Waiting for user input
-  | 'completed'                         // Successfully completed
-  | 'failed'                            // Failed with error
-  | 'killed';                           // Manually terminated
+type CallStatus = 
+  | 'pending'                    // Call queued but not started
+  | 'in_progress'                // Call currently executing
+  | 'completed'                  // Call finished successfully
+  | 'failed';                    // Call failed with error
 ```
 
-### Task Context
+**Call Details**:
+- During execution: Context needed to resume (implementation-specific)
+- After completion: Result returned by the ability
+- After failure: Error message and stack trace
 
-Each task maintains an isolated context of all messages:
+#### Message Entity
+
+Represents a message in the task conversation:
 
 ```typescript
-type ChatMessage = 
-  | { role: 'system'; content: string }
-  | { role: 'user'; content: string }
-  | { role: 'assistant'; content: string; tool_calls?: ToolCall[] }
-  | { role: 'tool'; content: string; tool_call_id: string };
+type Message = {
+  id: string;                    // Unique message identifier
+  taskId: string;                // Task this message belongs to
+  role: MessageRole;             // Message sender role
+  content: string;               // Message content (supports markdown)
+  timestamp: number;             // Message receipt timestamp
+                                 // For streaming: timestamp of first chunk
+};
+
+type MessageRole = 
+  | 'system'                     // System instructions
+  | 'user'                       // User input
+  | 'assistant';                 // LLM response
 ```
 
-The context grows with each iteration:
-1. User message → append to context
-2. LLM response → append to context
-3. Tool calls → execute and append results to context
-4. Final response → append to context
+### Entity Relationships
 
-### Task Output Stream
-
-Tasks emit structured output events:
-
-```typescript
-type TaskOutput = 
-  | { type: 'start'; taskId: string; goal: string }
-  | { type: 'content'; taskId: string; content: string }
-  | { type: 'tool_call'; taskId: string; tool: string; args: Record<string, any> }
-  | { type: 'tool_result'; taskId: string; tool: string; result: string; error?: string }
-  | { type: 'end'; taskId: string; status: 'completed' | 'failed' }
-  | { type: 'error'; taskId: string; error: string };
 ```
+Task (1) ──────────< (n) Call
+  │
+  └──────────< (n) Message
+                      ▲
+                      │
+Call ──startMessageId─┤
+     ──endMessageId───┘
+```
+
+- **Task to Call**: 1:n relationship (all ability calls in a task)
+- **Task to Message**: 1:n relationship (all messages in task conversation)
+- **Call to Message**: Call references its announcement messages
+
+## Task Lifecycle
+
+### Lifecycle States
+
+A task's lifecycle is determined by its `completionStatus`:
+
+```
+┌─────────────────────────────────────────────────┐
+│ Task Created                                    │
+│ completionStatus = undefined                    │
+└───────────────────┬─────────────────────────────┘
+                    │
+                    ▼
+         ┌──────────────────────┐
+         │   Task In Progress   │
+         │  (executing loops)   │
+         └───────┬──────────────┘
+                 │
+        ┌────────┼────────┐
+        │        │        │
+        ▼        ▼        ▼
+    ┌────────┐ ┌──────┐ ┌────────┐
+    │Success │ │Cancel│ │ Failed │
+    └────────┘ └──────┘ └────────┘
+```
+
+### Message Routing
+
+When Agent receives a user message, Task Manager routes it:
+
+1. **Call `task:route`** with message content
+2. **If route returns taskId**: Append message to that task
+3. **If route returns null**: Create new task with `task:create`
+4. **Resume/Start execution** for the target task
 
 ## Registered Abilities
 
 Task Manager registers the following abilities on the Agent Bus:
 
-### task:spawn
+### task:route
 
-**Description**: Create a new task with the given goal.
+**Description**: Route a user message to the appropriate active task, or indicate a new task should be created.
+
+**Input Schema**:
+```json
+{
+  "type": "object",
+  "properties": {
+    "message": {
+      "type": "string",
+      "description": "User message content"
+    }
+  },
+  "required": ["message"]
+}
+```
+
+**Output Schema**:
+```json
+{
+  "type": "object",
+  "properties": {
+    "taskId": {
+      "type": ["string", "null"],
+      "description": "Target task ID, or null to create new task"
+    },
+    "confidence": {
+      "type": "number",
+      "description": "Routing confidence (0-1)"
+    }
+  },
+  "required": ["taskId"]
+}
+```
+
+**Example**:
+```typescript
+const result = await bus.invoke('task:route')(JSON.stringify({
+  message: 'Can you also check Q2 data?'
+}));
+
+const { taskId, confidence } = JSON.parse(result);
+if (taskId) {
+  // Route to existing task
+  await appendMessageToTask(taskId, message);
+} else {
+  // Create new task
+  await createNewTask(message);
+}
+```
+
+**Routing Strategy**: See [Message Routing](#message-routing) section.
+
+### task:create
+
+**Description**: Create a new task and persist it to Memory.
 
 **Input Schema**:
 ```json
@@ -86,11 +216,11 @@ Task Manager registers the following abilities on the Agent Bus:
   "properties": {
     "goal": {
       "type": "string",
-      "description": "The goal or objective of the task"
+      "description": "Task goal or initial message"
     },
     "parentTaskId": {
       "type": "string",
-      "description": "Optional parent task ID for creating subtasks"
+      "description": "Optional parent task ID for subtasks"
     },
     "systemPrompt": {
       "type": "string",
@@ -108,31 +238,29 @@ Task Manager registers the following abilities on the Agent Bus:
   "properties": {
     "taskId": {
       "type": "string",
-      "description": "Unique identifier for the created task"
-    },
-    "status": {
-      "type": "string",
-      "enum": ["pending", "running"]
+      "description": "Created task ID"
     }
   },
-  "required": ["taskId", "status"]
+  "required": ["taskId"]
 }
 ```
 
 **Example**:
 ```typescript
-const result = await bus.invoke('task:spawn')(JSON.stringify({
-  goal: 'Analyze Q1 sales data'
+const result = await bus.invoke('task:create')(JSON.stringify({
+  goal: 'Analyze Q1 sales data',
+  systemPrompt: 'You are a data analyst assistant.'
 }));
 
-// { "taskId": "task-abc123", "status": "running" }
+const { taskId } = JSON.parse(result);
+console.log(`Created task: ${taskId}`);
 ```
 
-**Key Feature**: LLM can invoke `task:spawn` to create subtasks, enabling recursive task decomposition.
+**Implementation Note**: This ability creates the Task entity, initial system message, and initial user message, then persists all to Memory before starting execution.
 
-### task:send
+### task:cancel
 
-**Description**: Send a message to an existing task.
+**Description**: Cancel an in-progress task.
 
 **Input Schema**:
 ```json
@@ -141,14 +269,14 @@ const result = await bus.invoke('task:spawn')(JSON.stringify({
   "properties": {
     "taskId": {
       "type": "string",
-      "description": "Target task ID"
+      "description": "Task to cancel"
     },
-    "message": {
+    "reason": {
       "type": "string",
-      "description": "Message to send"
+      "description": "Cancellation reason"
     }
   },
-  "required": ["taskId", "message"]
+  "required": ["taskId", "reason"]
 }
 ```
 
@@ -159,85 +287,36 @@ const result = await bus.invoke('task:spawn')(JSON.stringify({
   "properties": {
     "success": {
       "type": "boolean"
-    },
-    "status": {
-      "type": "string",
-      "enum": ["running", "waiting", "completed", "failed"]
     }
   },
-  "required": ["success", "status"]
+  "required": ["success"]
 }
 ```
 
 **Example**:
 ```typescript
-const result = await bus.invoke('task:send')(JSON.stringify({
+const result = await bus.invoke('task:cancel')(JSON.stringify({
   taskId: 'task-abc123',
-  message: 'Focus on regional breakdown'
+  reason: 'User requested cancellation'
 }));
 
-// { "success": true, "status": "running" }
+const { success } = JSON.parse(result);
 ```
 
-### task:stream
+**Behavior**: Sets task's `completionStatus` to `'cancelled'`, stops execution loop, and marks any in-progress calls as failed.
 
-**Description**: Stream output from a task in real-time.
+### task:active
+
+**Description**: List all active (in-progress) tasks.
 
 **Input Schema**:
 ```json
 {
   "type": "object",
   "properties": {
-    "taskId": {
-      "type": "string",
-      "description": "Target task ID"
-    }
-  },
-  "required": ["taskId"]
-}
-```
-
-**Output**: Stream of `TaskOutput` events (JSON strings).
-
-**Example**:
-```typescript
-const stream = bus.invokeStream('task:stream')(JSON.stringify({
-  taskId: 'task-abc123'
-}));
-
-for await (const chunk of stream) {
-  const output = JSON.parse(chunk);
-  switch (output.type) {
-    case 'content':
-      process.stdout.write(output.content);
-      break;
-    case 'tool_call':
-      console.log(`\nCalling ${output.tool}...`);
-      break;
-  }
-}
-```
-
-### task:list
-
-**Description**: List tasks with optional filtering.
-
-**Input Schema**:
-```json
-{
-  "type": "object",
-  "properties": {
-    "status": {
-      "type": "string",
-      "enum": ["pending", "running", "waiting", "completed", "failed", "killed"]
-    },
-    "parentTaskId": {
-      "type": "string",
-      "description": "Filter by parent task (for listing subtasks)"
-    },
     "limit": {
       "type": "number",
-      "description": "Maximum number of tasks to return"
+      "description": "Maximum tasks to return"
     }
   }
 }
@@ -254,531 +333,810 @@ for await (const chunk of stream) {
         "type": "object",
         "properties": {
           "id": { "type": "string" },
-          "goal": { "type": "string" },
-          "status": { "type": "string" },
           "parentTaskId": { "type": "string" },
           "createdAt": { "type": "number" },
           "updatedAt": { "type": "number" }
         }
       }
-    },
-    "total": {
-      "type": "number",
-      "description": "Total number of matching tasks"
     }
   },
-  "required": ["tasks", "total"]
+  "required": ["tasks"]
 }
 ```
 
 **Example**:
 ```typescript
-const result = await bus.invoke('task:list')(JSON.stringify({
-  status: 'running'
+const result = await bus.invoke('task:active')(JSON.stringify({
+  limit: 10
 }));
 
-// {
-//   "tasks": [
-//     { "id": "task-abc", "goal": "...", "status": "running", ... },
-//     { "id": "task-xyz", "goal": "...", "status": "running", ... }
-//   ],
-//   "total": 2
-// }
-```
-
-### task:get
-
-**Description**: Get detailed information about a specific task.
-
-**Input Schema**:
-```json
-{
-  "type": "object",
-  "properties": {
-    "taskId": {
-      "type": "string"
-    },
-    "includeContext": {
-      "type": "boolean",
-      "description": "Whether to include full message history"
-    }
-  },
-  "required": ["taskId"]
-}
-```
-
-**Output Schema**:
-```json
-{
-  "type": "object",
-  "properties": {
-    "task": {
-      "type": "object",
-      "properties": {
-        "id": { "type": "string" },
-        "goal": { "type": "string" },
-        "status": { "type": "string" },
-        "parentTaskId": { "type": "string" },
-        "createdAt": { "type": "number" },
-        "updatedAt": { "type": "number" },
-        "completedAt": { "type": "number" },
-        "metadata": { "type": "object" },
-        "context": { "type": "array" }
-      }
-    }
-  },
-  "required": ["task"]
-}
-```
-
-**Example**:
-```typescript
-const result = await bus.invoke('task:get')(JSON.stringify({
-  taskId: 'task-abc123',
-  includeContext: true
-}));
-
-// {
-//   "task": {
-//     "id": "task-abc123",
-//     "goal": "Analyze sales data",
-//     "status": "running",
-//     "context": [ ... ],
-//     ...
-//   }
-// }
-```
-
-### task:kill
-
-**Description**: Terminate a running task.
-
-**Input Schema**:
-```json
-{
-  "type": "object",
-  "properties": {
-    "taskId": {
-      "type": "string"
-    },
-    "reason": {
-      "type": "string",
-      "description": "Optional reason for termination"
-    }
-  },
-  "required": ["taskId"]
-}
-```
-
-**Output Schema**:
-```json
-{
-  "type": "object",
-  "properties": {
-    "success": {
-      "type": "boolean"
-    },
-    "previousStatus": {
-      "type": "string"
-    }
-  },
-  "required": ["success", "previousStatus"]
-}
-```
-
-**Example**:
-```typescript
-const result = await bus.invoke('task:kill')(JSON.stringify({
-  taskId: 'task-abc123',
-  reason: 'User requested cancellation'
-}));
-
-// { "success": true, "previousStatus": "running" }
+const { tasks } = JSON.parse(result);
+console.log(`${tasks.length} active tasks`);
 ```
 
 ## Task Execution Flow
 
-### Task Run Loop
+### Execution Loop
 
-When a task is spawned or receives a message, it enters the run loop:
+When a task is created or receives a new message, it enters the execution loop:
 
 ```
-┌─────────────────────────────────────────────────────┐
-│ 1. Append user message to context                  │
-└───────────────────┬─────────────────────────────────┘
+┌─────────────────────────────────────────────────┐
+│ 1. Load task context from Memory                │
+│    - Fetch all messages via mem:message:list    │
+└───────────────────┬─────────────────────────────┘
                     │
                     ▼
-┌─────────────────────────────────────────────────────┐
-│ 2. Invoke model:llm with full context              │
-└───────────────────┬─────────────────────────────────┘
+┌─────────────────────────────────────────────────┐
+│ 2. Invoke model:llm with full context           │
+│    - Pass messages + available tools             │
+└───────────────────┬─────────────────────────────┘
                     │
                     ▼
-┌─────────────────────────────────────────────────────┐
-│ 3. Stream LLM response                             │
-│    - Output content chunks                          │
-│    - Collect tool calls                             │
-└───────────────────┬─────────────────────────────────┘
+┌─────────────────────────────────────────────────┐
+│ 3. Stream LLM response                          │
+│    - Output content chunks to user              │
+│    - Collect tool calls                          │
+│    - Save assistant message to Memory           │
+└───────────────────┬─────────────────────────────┘
                     │
                     ▼
          ┌──────────────────────┐
          │ Has tool calls?      │
          └────┬─────────────┬───┘
-              │ Yes         │ No
-              ▼             ▼
-┌──────────────────────┐   ┌──────────────────────┐
-│ 4. Execute tools     │   │ 5. Append response   │
-│    via bus           │   │    Task complete     │
-│    (parallel)        │   │    or waiting        │
-└────┬─────────────────┘   └──────────────────────┘
-     │
-     ▼
-┌──────────────────────────────────────────────────┐
-│ 6. Append tool results to context               │
-└────┬─────────────────────────────────────────────┘
-     │
-     │ Loop back to step 2
-     │ (max iterations: 10)
-     └────────────────────────────────────────────►
+              │ No          │ Yes
+              │             │
+              │             ▼
+              │   ┌────────────────────────┐
+              │   │ 4. Execute tool calls  │
+              │   │    For each tool call: │
+              │   │    - Create Call entity│
+              │   │    - Save call start   │
+              │   │    - Execute ability   │
+              │   │    - Save call end     │
+              │   └──────────┬─────────────┘
+              │              │
+              │              │ Loop back to step 1
+              │              └──────────────────►
+              │
+              ▼
+┌─────────────────────────────────────────────────┐
+│ 5. Mark task as completed                       │
+│    - Set completionStatus = 'success'           │
+│    - Update task in Memory                      │
+└─────────────────────────────────────────────────┘
 ```
 
-### Pseudo-code Implementation
+### Detailed Execution Steps
+
+#### Step 1: Load Task Context
 
 ```typescript
-async function* runTaskLoop(task: Task, bus: AgentBus): AsyncGenerator<TaskOutput> {
-  const maxIterations = 10;
-  let iteration = 0;
+const loadTaskContext = async (
+  taskId: string,
+  bus: AgentBus
+): Promise<Message[]> => {
+  const result = await bus.invoke('mem:message:list')(
+    JSON.stringify({ taskId })
+  );
   
-  yield { type: 'start', taskId: task.id, goal: task.goal };
+  const { messages } = JSON.parse(result);
+  return messages;
+};
+```
+
+#### Step 2: Invoke LLM
+
+```typescript
+const invokeLLM = async (
+  messages: Message[],
+  tools: ToolDefinition[],
+  bus: AgentBus
+): AsyncGenerator<LLMChunk> => {
+  const stream = bus.invokeStream('model:llm')(JSON.stringify({
+    messages: messages.map(m => ({
+      role: m.role,
+      content: m.content
+    })),
+    tools
+  }));
   
-  while (iteration < maxIterations) {
-    iteration++;
+  return stream;
+};
+```
+
+#### Step 3: Process LLM Response
+
+```typescript
+const processLLMResponse = async (
+  taskId: string,
+  stream: AsyncGenerator<string>,
+  bus: AgentBus
+): Promise<{ content: string; toolCalls: ToolCall[] }> => {
+  let content = '';
+  const toolCalls: ToolCall[] = [];
+  
+  for await (const chunk of stream) {
+    const data = JSON.parse(chunk);
     
-    // Step 1: Call LLM with current context
-    const llmInput = {
-      messages: task.context,
-      tools: await getAllToolDefinitions(bus)
-    };
-    
-    const llmStream = bus.invokeStream('model:llm')(JSON.stringify(llmInput));
-    
-    let assistantMessage = '';
-    let toolCalls: ToolCall[] = [];
-    
-    // Step 2: Stream LLM output
-    for await (const chunk of llmStream) {
-      const data = JSON.parse(chunk);
-      
-      if (data.content) {
-        assistantMessage += data.content;
-        yield { type: 'content', taskId: task.id, content: data.content };
-      }
-      
-      if (data.toolCalls) {
-        toolCalls.push(...data.toolCalls);
-      }
+    if (data.content) {
+      content += data.content;
+      // Stream to user in real-time
+      emitToUser({ type: 'content', content: data.content });
     }
     
-    // Append assistant message to context
-    task.context.push({
-      role: 'assistant',
-      content: assistantMessage,
-      tool_calls: toolCalls.length > 0 ? toolCalls : undefined
-    });
-    
-    // Step 3: Execute tool calls
-    if (toolCalls.length === 0) {
-      // No tool calls, task is complete or waiting
-      task.status = 'completed';
-      yield { type: 'end', taskId: task.id, status: 'completed' };
-      break;
+    if (data.toolCalls) {
+      toolCalls.push(...data.toolCalls);
     }
-    
-    // Execute tools in parallel
-    const toolResults = await Promise.all(
-      toolCalls.map(async (tc) => {
-        yield {
-          type: 'tool_call',
-          taskId: task.id,
-          tool: tc.function.name,
-          args: JSON.parse(tc.function.arguments)
-        };
-        
-        try {
-          const abilityId = tc.function.name.replace('_', ':');
-          const result = await bus.invoke(abilityId)(tc.function.arguments);
-          
-          yield {
-            type: 'tool_result',
-            taskId: task.id,
-            tool: tc.function.name,
-            result
-          };
-          
-          return {
-            role: 'tool',
-            content: result,
-            tool_call_id: tc.id
-          };
-        } catch (error) {
-          yield {
-            type: 'tool_result',
-            taskId: task.id,
-            tool: tc.function.name,
-            result: '',
-            error: error.message
-          };
-          
-          return {
-            role: 'tool',
-            content: `Error: ${error.message}`,
-            tool_call_id: tc.id
-          };
-        }
-      })
+  }
+  
+  // Save assistant message to Memory
+  await saveMessage(taskId, 'assistant', content, bus);
+  
+  return { content, toolCalls };
+};
+```
+
+#### Step 4: Execute Tool Calls
+
+```typescript
+const executeToolCalls = async (
+  taskId: string,
+  toolCalls: ToolCall[],
+  bus: AgentBus
+): Promise<void> => {
+  for (const tc of toolCalls) {
+    await executeToolCall(taskId, tc, bus);
+  }
+};
+
+const executeToolCall = async (
+  taskId: string,
+  toolCall: ToolCall,
+  bus: AgentBus
+): Promise<void> => {
+  const callId = generateId();
+  const abilityName = toolCall.function.name.replace('_', ':');
+  
+  // Create Call entity (status = pending)
+  const call: Call = {
+    id: callId,
+    taskId,
+    abilityName,
+    parameters: toolCall.function.arguments,
+    status: 'pending',
+    details: '{}',
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    startMessageId: '',
+    endMessageId: undefined
+  };
+  
+  // Save start message
+  const startMsg = await saveMessage(
+    taskId,
+    'assistant',
+    `🔧 Calling ${abilityName}...`,
+    bus
+  );
+  call.startMessageId = startMsg.id;
+  
+  // Update call status to in_progress and save
+  call.status = 'in_progress';
+  call.updatedAt = Date.now();
+  await bus.invoke('mem:call:save')(JSON.stringify({ call }));
+  
+  try {
+    // Execute ability
+    const result = await bus.invoke(abilityName)(
+      toolCall.function.arguments
     );
     
-    // Append tool results to context
-    task.context.push(...toolResults);
+    // Update call to completed
+    call.status = 'completed';
+    call.details = result;
+    call.updatedAt = Date.now();
+    
+    // Save end message
+    const endMsg = await saveMessage(
+      taskId,
+      'assistant',
+      `✓ ${abilityName} completed`,
+      bus
+    );
+    call.endMessageId = endMsg.id;
+    
+  } catch (error) {
+    // Update call to failed
+    call.status = 'failed';
+    call.details = JSON.stringify({
+      error: error.message,
+      stack: error.stack
+    });
+    call.updatedAt = Date.now();
+    
+    // Save error message
+    const endMsg = await saveMessage(
+      taskId,
+      'assistant',
+      `✗ ${abilityName} failed: ${error.message}`,
+      bus
+    );
+    call.endMessageId = endMsg.id;
   }
   
-  if (iteration >= maxIterations) {
-    task.status = 'failed';
-    yield {
-      type: 'error',
-      taskId: task.id,
-      error: 'Max iterations reached'
-    };
-  }
-}
+  // Save final call state
+  await bus.invoke('mem:call:save')(JSON.stringify({ call }));
+};
+```
+
+#### Step 5: Complete Task
+
+```typescript
+const completeTask = async (
+  taskId: string,
+  bus: AgentBus
+): Promise<void> => {
+  const task = await loadTask(taskId, bus);
+  task.completionStatus = 'success';
+  task.updatedAt = Date.now();
+  
+  await bus.invoke('mem:task:save')(JSON.stringify({ task }));
+  
+  emitToUser({
+    type: 'task_complete',
+    taskId,
+    status: 'success'
+  });
+};
+```
+
+### Task Creation Flow
+
+When a new task is created:
+
+```typescript
+const createTask = async (
+  goal: string,
+  systemPrompt: string,
+  bus: AgentBus
+): Promise<string> => {
+  const taskId = generateId();
+  
+  // Create task entity
+  const task: Task = {
+    id: taskId,
+    parentTaskId: undefined,
+    completionStatus: undefined,
+    systemPrompt,
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  };
+  
+  // Save task to Memory
+  await bus.invoke('mem:task:save')(JSON.stringify({ task }));
+  
+  // Create system message
+  await saveMessage(taskId, 'system', systemPrompt, bus);
+  
+  // Create initial user message
+  await saveMessage(taskId, 'user', goal, bus);
+  
+  // Start execution in background
+  startTaskExecution(taskId, bus);
+  
+  return taskId;
+};
 ```
 
 ## Message Routing
 
-When a message is sent without specifying a task ID, the Task Manager uses a **router** to determine which task should handle it:
+Task Manager uses the `task:route` ability to determine which task should handle an incoming message.
 
 ### Routing Strategy
 
 ```typescript
-async function routeMessage(
+const routeMessage = async (
   message: string,
-  activeTasks: Task[],
   bus: AgentBus
-): Promise<string | null> {
-  // If no active tasks, return null (will create new task)
-  if (activeTasks.length === 0) {
+): Promise<string | null> => {
+  // Get active tasks
+  const activeResult = await bus.invoke('task:active')('{}');
+  const { tasks } = JSON.parse(activeResult);
+  
+  // No active tasks → create new
+  if (tasks.length === 0) {
     return null;
   }
   
-  // If only one active task, route to it
-  if (activeTasks.length === 1) {
-    return activeTasks[0].id;
+  // Single active task → route to it
+  if (tasks.length === 1) {
+    return tasks[0].id;
   }
   
-  // Multiple active tasks: use LLM to determine best match
-  const routerInput = {
-    message,
-    tasks: activeTasks.map(t => ({
-      id: t.id,
-      goal: t.goal,
-      status: t.status,
-      lastMessage: t.context[t.context.length - 1]
-    }))
-  };
+  // Multiple active tasks → use LLM to decide
+  return await llmBasedRouting(message, tasks, bus);
+};
+```
+
+### LLM-Based Routing
+
+When multiple tasks are active, use LLM to determine the best match:
+
+```typescript
+const llmBasedRouting = async (
+  message: string,
+  tasks: Task[],
+  bus: AgentBus
+): Promise<string | null> => {
+  // Load recent context for each task
+  const taskContexts = await Promise.all(
+    tasks.map(async (task) => {
+      const messages = await loadTaskContext(task.id, bus);
+      return {
+        taskId: task.id,
+        recentMessages: messages.slice(-3)
+      };
+    })
+  );
   
+  // Build routing prompt
+  const routingPrompt = buildRoutingPrompt(message, taskContexts);
+  
+  // Get LLM decision
   const result = await bus.invoke('model:llm')(JSON.stringify({
     messages: [
       {
         role: 'system',
-        content: `You are a message router. Given a user message and a list of active tasks,
-                  determine which task (if any) the message should be routed to.
-                  Respond with JSON: { "taskId": "task-xxx" } or { "taskId": null } for new task.`
+        content: `You are a message router. Determine which task
+                  should handle the user's message. Respond with
+                  JSON: { "taskId": "task-xxx" } or
+                  { "taskId": null } for new task.`
       },
       {
         role: 'user',
-        content: JSON.stringify(routerInput)
+        content: routingPrompt
       }
     ]
   }));
   
   const { taskId } = JSON.parse(result);
   return taskId;
-}
+};
 ```
+
+### Explicit Task Selection
+
+Users can explicitly specify a task using special syntax:
+
+```
+@task-abc123 Please also check Q2 data
+```
+
+The routing logic checks for this pattern first:
+
+```typescript
+const extractExplicitTaskId = (message: string): string | undefined => {
+  const match = message.match(/^@(task-[a-z0-9]+)\s+/);
+  return match?.[1];
+};
+```
+
+## Integration with Memory
+
+Task Manager relies on Memory module for all persistence operations.
+
+### Required Memory Abilities
+
+#### mem:task:save
+
+Save or update a task entity.
+
+**Input**: `{ task: Task }`  
+**Output**: `{ success: boolean }`
+
+#### mem:task:get
+
+Retrieve a task entity by ID.
+
+**Input**: `{ taskId: string }`  
+**Output**: `{ task: Task | null }`
+
+#### mem:task:query
+
+Query tasks with filters.
+
+**Input**: `{ completionStatus?: string; limit?: number; offset?: number }`  
+**Output**: `{ tasks: Task[]; total: number }`
+
+#### mem:call:save
+
+Save or update a call entity.
+
+**Input**: `{ call: Call }`  
+**Output**: `{ success: boolean }`
+
+#### mem:call:list
+
+List all calls for a task.
+
+**Input**: `{ taskId: string }`  
+**Output**: `{ calls: Call[] }`
+
+#### mem:message:save
+
+Save a message entity.
+
+**Input**: `{ message: Message }`  
+**Output**: `{ success: boolean; messageId: string }`
+
+#### mem:message:list
+
+List all messages for a task.
+
+**Input**: `{ taskId: string; limit?: number; offset?: number }`  
+**Output**: `{ messages: Message[]; total: number }`
+
+### Helper Functions
+
+```typescript
+const saveMessage = async (
+  taskId: string,
+  role: MessageRole,
+  content: string,
+  bus: AgentBus
+): Promise<Message> => {
+  const message: Message = {
+    id: generateId(),
+    taskId,
+    role,
+    content,
+    timestamp: Date.now()
+  };
+  
+  await bus.invoke('mem:message:save')(
+    JSON.stringify({ message })
+  );
+  
+  return message;
+};
+
+const loadTask = async (
+  taskId: string,
+  bus: AgentBus
+): Promise<Task> => {
+  const result = await bus.invoke('mem:task:get')(
+    JSON.stringify({ taskId })
+  );
+  
+  const { task } = JSON.parse(result);
+  if (!task) {
+    throw new Error(`Task not found: ${taskId}`);
+  }
+  
+  return task;
+};
+```
+
+## State Management
+
+Task Manager maintains minimal in-memory state:
+
+```typescript
+type TaskManagerState = {
+  activeTaskIds: Set<string>;       // Tasks currently executing
+  executionLoops: Map<string, Promise<void>>; // Running loops
+};
+```
+
+**Key Properties**:
+- No task details stored in memory
+- All data retrieved from Memory on-demand
+- Supports multiple Task Manager instances
+- Shared state via Memory enables horizontal scaling
+
+### Initialization
+
+On startup, Task Manager recovers active tasks:
+
+```typescript
+const initializeTaskManager = async (
+  bus: AgentBus
+): Promise<TaskManagerState> => {
+  const state: TaskManagerState = {
+    activeTaskIds: new Set(),
+    executionLoops: new Map()
+  };
+  
+  // Query incomplete tasks from Memory
+  const result = await bus.invoke('mem:task:query')(
+    JSON.stringify({ completionStatus: undefined })
+  );
+  
+  const { tasks } = JSON.parse(result);
+  
+  // Resume each task
+  for (const task of tasks) {
+    await recoverTask(task.id, state, bus);
+  }
+  
+  return state;
+};
+```
+
+## Error Handling & Recovery
+
+### Call Recovery Strategy
+
+When Agent restarts, it checks for in-progress calls:
+
+```typescript
+const recoverTask = async (
+  taskId: string,
+  state: TaskManagerState,
+  bus: AgentBus
+): Promise<void> => {
+  // Check for in-progress calls
+  const callsResult = await bus.invoke('mem:call:list')(
+    JSON.stringify({ taskId })
+  );
+  
+  const { calls } = JSON.parse(callsResult);
+  const inProgressCalls = calls.filter(
+    c => c.status === 'in_progress'
+  );
+  
+  // Mark in-progress calls as failed
+  for (const call of inProgressCalls) {
+    call.status = 'failed';
+    call.details = JSON.stringify({
+      error: 'Process crashed during execution'
+    });
+    call.updatedAt = Date.now();
+    
+    await bus.invoke('mem:call:save')(
+      JSON.stringify({ call })
+    );
+    
+    // Add failure message
+    await saveMessage(
+      taskId,
+      'assistant',
+      `✗ ${call.abilityName} failed due to process crash`,
+      bus
+    );
+  }
+  
+  // Resume task execution
+  resumeTaskExecution(taskId, state, bus);
+};
+```
+
+**Design Decision**: Mark in-progress calls as failed rather than retry. Rationale:
+- Avoids duplicate execution of non-idempotent operations
+- LLM has full context to decide whether to retry
+- Simplifies recovery logic
+
+### Task Execution Errors
+
+Handle errors during normal execution:
+
+```typescript
+const runTaskLoop = async (
+  taskId: string,
+  bus: AgentBus
+): Promise<void> => {
+  try {
+    const maxIterations = 10;
+    let iteration = 0;
+    
+    while (iteration < maxIterations) {
+      iteration++;
+      
+      // Load context
+      const messages = await loadTaskContext(taskId, bus);
+      
+      // Invoke LLM
+      const tools = await getAllToolDefinitions(bus);
+      const stream = bus.invokeStream('model:llm')(
+        JSON.stringify({ messages, tools })
+      );
+      
+      // Process response
+      const { content, toolCalls } = await processLLMResponse(
+        taskId,
+        stream,
+        bus
+      );
+      
+      // No tool calls → task complete
+      if (toolCalls.length === 0) {
+        await completeTask(taskId, bus);
+        return;
+      }
+      
+      // Execute tools
+      await executeToolCalls(taskId, toolCalls, bus);
+    }
+    
+    // Max iterations reached
+    await failTask(
+      taskId,
+      'Maximum iterations reached',
+      bus
+    );
+    
+  } catch (error) {
+    await failTask(taskId, error.message, bus);
+  }
+};
+
+const failTask = async (
+  taskId: string,
+  reason: string,
+  bus: AgentBus
+): Promise<void> => {
+  const task = await loadTask(taskId, bus);
+  task.completionStatus = `failed: ${reason}`;
+  task.updatedAt = Date.now();
+  
+  await bus.invoke('mem:task:save')(JSON.stringify({ task }));
+  
+  await saveMessage(
+    taskId,
+    'assistant',
+    `Task failed: ${reason}`,
+    bus
+  );
+};
+```
+
+### Graceful Shutdown
+
+On shutdown signal, save all active task states:
+
+```typescript
+const shutdownTaskManager = async (
+  state: TaskManagerState,
+  bus: AgentBus
+): Promise<void> => {
+  console.log('Shutting down Task Manager...');
+  
+  // Wait for all execution loops to complete (with timeout)
+  const loops = Array.from(state.executionLoops.values());
+  await Promise.race([
+    Promise.all(loops),
+    new Promise(resolve => setTimeout(resolve, 5000))
+  ]);
+  
+  // All state is already persisted to Memory
+  console.log('Task Manager shutdown complete');
+};
+```
+
+**Note**: Because all state is continuously persisted to Memory, graceful shutdown primarily involves waiting for in-flight operations to complete. No special state saving is needed.
 
 ## Subtask Management
 
 ### Creating Subtasks
 
-LLM can create subtasks by invoking `task:spawn` with `parentTaskId`:
+LLM can create subtasks by invoking `task:create` with `parentTaskId`:
 
 ```typescript
-// In task's run loop, LLM makes tool call:
+// LLM makes tool call:
 {
   "function": {
-    "name": "task_spawn",
+    "name": "task_create",
     "arguments": JSON.stringify({
-      goal: "Analyze Q1 data",
+      goal: "Analyze Q1 sales data",
       parentTaskId: currentTaskId
     })
   }
 }
-
-// Parent task receives subtask ID and can:
-// 1. Wait for subtask completion
-// 2. Continue with other work
-// 3. Monitor subtask progress
 ```
 
-### Subtask Tree
+The parent task receives the subtask ID and can:
+- Wait for subtask completion
+- Continue with other work
+- Query subtask status
 
-Tasks form a tree structure:
+### Querying Subtasks
 
-```
-task-root (Analyze annual sales)
-├── task-q1 (Analyze Q1 data)
-│   ├── task-jan (Analyze January)
-│   ├── task-feb (Analyze February)
-│   └── task-mar (Analyze March)
-├── task-q2 (Analyze Q2 data)
-├── task-q3 (Analyze Q3 data)
-└── task-q4 (Analyze Q4 data)
-```
-
-Query subtasks:
+Use Memory module to query subtasks:
 
 ```typescript
-const result = await bus.invoke('task:list')(JSON.stringify({
-  parentTaskId: 'task-root'
+const result = await bus.invoke('mem:task:query')(JSON.stringify({
+  parentTaskId: 'task-root',
+  completionStatus: undefined  // Only active subtasks
 }));
 
-// Returns all direct children of task-root
+const { tasks } = JSON.parse(result);
+console.log(`${tasks.length} active subtasks`);
 ```
 
-## State Management
+## Implementation Example
 
-### Task Registry
-
-All tasks are stored in an in-memory registry:
+### Complete Task Manager Module
 
 ```typescript
-type TaskRegistry = {
-  tasks: Map<string, Task>;
-  activeTasks: Set<string>;           // Tasks in 'running' status
-  taskOutputStreams: Map<string, Set<OutputListener>>;
+type TaskManagerConfig = {
+  maxConcurrentTasks: number;
+  maxIterationsPerTask: number;
 };
 
-type OutputListener = (output: TaskOutput) => void;
-```
-
-### Concurrent Task Limit
-
-Limit the number of concurrent running tasks:
-
-```typescript
-const MAX_CONCURRENT_TASKS = 10;
-
-function canSpawnTask(registry: TaskRegistry): boolean {
-  return registry.activeTasks.size < MAX_CONCURRENT_TASKS;
-}
-```
-
-If limit reached, new tasks start in `pending` status and are queued.
-
-## Error Handling
-
-### Task Failure
-
-If a task encounters an error:
-
-1. Set status to `failed`
-2. Emit error output event
-3. Optionally save to memory for debugging
-
-```typescript
-try {
-  // Run task loop
-  yield* runTaskLoop(task, bus);
-} catch (error) {
-  task.status = 'failed';
-  yield {
-    type: 'error',
-    taskId: task.id,
-    error: error.message
+const createTaskManager = (
+  bus: AgentBus,
+  config: TaskManagerConfig
+) => {
+  const state: TaskManagerState = {
+    activeTaskIds: new Set(),
+    executionLoops: new Map()
   };
   
-  // Optionally archive failed task
-  await bus.invoke('mem:save')(JSON.stringify({
-    task: task,
-    error: error.message
-  }));
-}
+  // Register abilities
+  registerTaskRouteAbility(state, bus);
+  registerTaskCreateAbility(state, bus, config);
+  registerTaskCancelAbility(state, bus);
+  registerTaskActiveAbility(state, bus);
+  
+  // Initialize
+  initializeTaskManager(bus).then(recoveredState => {
+    state.activeTaskIds = recoveredState.activeTaskIds;
+    state.executionLoops = recoveredState.executionLoops;
+  });
+  
+  return state;
+};
 ```
 
-### Graceful Shutdown
-
-On system shutdown, save all active tasks:
+### Ability Registration
 
 ```typescript
-async function shutdownTaskManager(
-  registry: TaskRegistry,
-  bus: AgentBus
-): Promise<void> {
-  for (const taskId of registry.activeTasks) {
-    const task = registry.tasks.get(taskId);
-    if (task) {
-      task.status = 'waiting';
-      await bus.invoke('mem:save')(JSON.stringify({ task }));
+const registerTaskCreateAbility = (
+  state: TaskManagerState,
+  bus: AgentBus,
+  config: TaskManagerConfig
+) => {
+  bus.register(
+    {
+      id: 'task:create',
+      moduleName: 'task',
+      abilityName: 'create',
+      description: 'Create a new task',
+      isStream: false,
+      inputSchema: {
+        type: 'object',
+        properties: {
+          goal: { type: 'string' },
+          parentTaskId: { type: 'string' },
+          systemPrompt: { type: 'string' }
+        },
+        required: ['goal']
+      },
+      outputSchema: {
+        type: 'object',
+        properties: {
+          taskId: { type: 'string' }
+        },
+        required: ['taskId']
+      }
+    },
+    async (input: string) => {
+      const { goal, parentTaskId, systemPrompt } = JSON.parse(input);
+      
+      const defaultPrompt = 'You are a helpful AI assistant.';
+      const taskId = await createTask(
+        goal,
+        systemPrompt || defaultPrompt,
+        bus
+      );
+      
+      state.activeTaskIds.add(taskId);
+      
+      return JSON.stringify({ taskId });
     }
-  }
-}
-```
-
-## Integration with Memory
-
-### Auto-Archiving
-
-When a task completes, automatically archive to long-term memory:
-
-```typescript
-async function onTaskComplete(task: Task, bus: AgentBus): Promise<void> {
-  // Save complete task record
-  await bus.invoke('mem:save')(JSON.stringify({ task }));
-  
-  // Extract knowledge and build graph
-  await bus.invoke('mem:archive')(JSON.stringify({
-    taskId: task.id,
-    context: task.context
-  }));
-}
-```
-
-### Context Recall
-
-When starting a task, retrieve relevant context from memory:
-
-```typescript
-async function initializeTaskContext(
-  goal: string,
-  bus: AgentBus
-): Promise<ChatMessage[]> {
-  // Retrieve relevant past knowledge
-  const memResult = await bus.invoke('mem:retrieve')(JSON.stringify({
-    query: goal,
-    limit: 5
-  }));
-  
-  const { chunks } = JSON.parse(memResult);
-  
-  // Build system message with recalled context
-  const systemMessage = {
-    role: 'system',
-    content: `You are a helpful AI assistant. Here is relevant context from past tasks:\n\n${
-      chunks.map(c => c.content).join('\n\n')
-    }`
-  };
-  
-  return [systemMessage];
-}
+  );
+};
 ```
 
 ## Testing Strategy
@@ -786,57 +1144,73 @@ async function initializeTaskContext(
 ### Unit Tests
 
 ```typescript
-test('task:spawn creates new task', async () => {
+test('task:create creates task and persists to Memory', async () => {
   const bus = createMockBus();
-  const taskManager = createTaskManager(bus);
+  const taskManager = createTaskManager(bus, defaultConfig);
   
-  const result = await bus.invoke('task:spawn')(JSON.stringify({
+  const result = await bus.invoke('task:create')(JSON.stringify({
     goal: 'Test task'
   }));
   
-  const { taskId, status } = JSON.parse(result);
+  const { taskId } = JSON.parse(result);
   expect(taskId).toBeDefined();
-  expect(status).toBe('running');
+  
+  // Verify task saved to Memory
+  const savedTask = await bus.invoke('mem:task:get')(
+    JSON.stringify({ taskId })
+  );
+  expect(JSON.parse(savedTask).task).toBeDefined();
 });
 
-test('task:list filters by status', async () => {
+test('task:route routes to existing task when appropriate', async () => {
   const bus = createMockBus();
-  const taskManager = createTaskManager(bus);
+  const taskManager = createTaskManager(bus, defaultConfig);
   
-  // Create tasks
-  await bus.invoke('task:spawn')('{"goal":"Task 1"}');
-  await bus.invoke('task:spawn')('{"goal":"Task 2"}');
+  // Create task
+  const createResult = await bus.invoke('task:create')(
+    JSON.stringify({ goal: 'Analyze sales' })
+  );
+  const { taskId } = JSON.parse(createResult);
   
-  const result = await bus.invoke('task:list')(JSON.stringify({
-    status: 'running'
+  // Route related message
+  const routeResult = await bus.invoke('task:route')(JSON.stringify({
+    message: 'Can you also check Q2?'
   }));
   
-  const { tasks, total } = JSON.parse(result);
-  expect(total).toBe(2);
+  const { taskId: routedTaskId } = JSON.parse(routeResult);
+  expect(routedTaskId).toBe(taskId);
 });
 ```
 
 ### Integration Tests
 
 ```typescript
-test('Full task lifecycle', async () => {
+test('Full task execution with tool calls', async () => {
   const bus = createAgentBus();
-  const taskManager = createTaskManager(bus);
+  const taskManager = createTaskManager(bus, defaultConfig);
   const modelManager = createModelManager(bus);
+  const memory = createMemory(bus);
   
-  // Spawn task
-  const spawnResult = await bus.invoke('task:spawn')('{"goal":"Test"}');
-  const { taskId } = JSON.parse(spawnResult);
+  // Create task
+  const result = await bus.invoke('task:create')(JSON.stringify({
+    goal: 'Test task with tool calls'
+  }));
   
-  // Stream output
-  const outputs = [];
-  for await (const chunk of bus.invokeStream('task:stream')(`{"taskId":"${taskId}"}`)) {
-    outputs.push(JSON.parse(chunk));
-  }
+  const { taskId } = JSON.parse(result);
   
-  // Verify output structure
-  expect(outputs[0].type).toBe('start');
-  expect(outputs[outputs.length - 1].type).toBe('end');
+  // Wait for completion
+  await waitForTaskCompletion(taskId, bus);
+  
+  // Verify all entities persisted
+  const task = await bus.invoke('mem:task:get')(
+    JSON.stringify({ taskId })
+  );
+  expect(JSON.parse(task).task.completionStatus).toBe('success');
+  
+  const messages = await bus.invoke('mem:message:list')(
+    JSON.stringify({ taskId })
+  );
+  expect(JSON.parse(messages).messages.length).toBeGreaterThan(0);
 });
 ```
 
@@ -844,12 +1218,12 @@ test('Full task lifecycle', async () => {
 
 Task Manager provides:
 
-✅ **Concurrent task execution** with isolated contexts
-✅ **Recursive subtasks** via `task:spawn` ability
-✅ **Message routing** to appropriate tasks
-✅ **Real-time streaming** of task output
-✅ **Task lifecycle management** (create, run, complete, kill)
-✅ **Integration with Memory** for context recall and archiving
+✅ **Persistence-first architecture** with continuous state saving  
+✅ **Full crash recovery** by resuming from persisted state  
+✅ **Clear separation of concerns** with Memory module  
+✅ **Lightweight in-memory state** enabling horizontal scaling  
+✅ **Intelligent message routing** via LLM-based decisions  
+✅ **Complete execution audit trail** through Call and Message entities  
+✅ **Graceful error handling** with automatic failure recovery
 
-As a Bus-below module, Task Manager is both a powerful orchestrator and a callable service.
-
+The persistence-first design ensures Agent OS tasks are durable and resilient, capable of surviving process crashes and providing complete visibility into task execution history.
