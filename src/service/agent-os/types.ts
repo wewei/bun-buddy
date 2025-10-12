@@ -1,5 +1,7 @@
 // Agent OS Core Types
 
+import type { z } from 'zod';
+
 // ============================================================================
 // Entity Types (Task, Call, Message)
 // ============================================================================
@@ -42,6 +44,7 @@ export type Message = {
 // Ability Types
 // ============================================================================
 
+// Legacy JSONSchema type for compatibility
 export type JSONSchema = {
   type: string;
   properties?: Record<string, unknown>;
@@ -52,15 +55,26 @@ export type JSONSchema = {
   [key: string]: unknown;
 };
 
-export type AbilityHandler = (taskId: string, input: string) => Promise<string>;
+// Result types for standardized error handling
+export type AbilityResult<R, E> = 
+  | { type: 'success'; result: R }
+  | { type: 'error'; error: E };
+
+export type InvokeResult<R, E> = 
+  | { type: 'invalid-ability'; message: string }
+  | { type: 'invalid-input'; message: string }
+  | { type: 'unknown-failure'; message: string }
+  | AbilityResult<R, E>;
+
+export type AbilityHandler = (taskId: string, input: string) => Promise<AbilityResult<string, string>>;
 
 export type AbilityMeta = {
   id: string; // e.g., 'task:spawn'
   moduleName: string; // e.g., 'task'
   abilityName: string; // e.g., 'spawn'
   description: string;
-  inputSchema: JSONSchema;
-  outputSchema: JSONSchema;
+  inputSchema: z.ZodSchema;
+  outputSchema: z.ZodSchema;
   tags?: string[];
 };
 
@@ -74,7 +88,7 @@ export type RegisteredAbility = {
 // ============================================================================
 
 export type AgentBus = {
-  invoke: (abilityId: string, callerId: string, input: string) => Promise<string>;
+  invoke: (abilityId: string, callerId: string, input: string) => Promise<InvokeResult<string, string>>;
   register: (meta: AbilityMeta, handler: AbilityHandler) => void;
   unregister: (abilityId: string) => void;
   has: (abilityId: string) => boolean;

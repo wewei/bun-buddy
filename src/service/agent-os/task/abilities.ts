@@ -1,6 +1,8 @@
 // Task Manager Abilities
 
-import type { AgentBus, AbilityMeta, Task, Message } from '../types';
+import { z } from 'zod';
+
+import type { AgentBus, AbilityMeta, Task, Message, AbilityResult } from '../types';
 import type { TaskRegistry } from './types';
 
 const generateId = (): string => {
@@ -48,51 +50,49 @@ const createInitialMessages = (taskId: string, task: Task, goal: string): Messag
   return [systemMessage, userMessage];
 };
 
+const unwrapInvokeResult = <R, E>(
+  result: AbilityResult<R, E> | { type: string; message?: string; error?: E }
+): R => {
+  if (result.type === 'success') {
+    return (result as AbilityResult<R, E> & { type: 'success' }).result;
+  }
+  const msg = 'message' in result && result.message 
+    ? result.message 
+    : 'error' in result && result.error 
+    ? String(result.error) 
+    : 'Unknown error';
+  throw new Error(`Invoke failed (${result.type}): ${msg}`);
+};
+
 const saveTaskAndMessages = async (
   bus: AgentBus,
   task: Task,
   messages: Message[]
 ): Promise<void> => {
-  await bus.invoke('ldg:task:save', 'system', JSON.stringify({ task }));
+  unwrapInvokeResult(await bus.invoke('ldg:task:save', 'system', JSON.stringify({ task })));
 
   for (const message of messages) {
-    await bus.invoke('ldg:msg:save', 'system', JSON.stringify({ message }));
+    unwrapInvokeResult(await bus.invoke('ldg:msg:save', 'system', JSON.stringify({ message })));
   }
 };
+
+const spawnInputSchema = z.object({
+  goal: z.string().describe('Task goal or initial message'),
+  parentTaskId: z.string().optional().describe('Optional parent task ID for subtasks'),
+  systemPrompt: z.string().optional().describe('Optional custom system prompt'),
+});
+
+const spawnOutputSchema = z.object({
+  taskId: z.string().describe('Created task ID'),
+});
 
 const spawnMeta: AbilityMeta = {
   id: 'task:spawn',
   moduleName: 'task',
   abilityName: 'spawn',
   description: 'Create a new task',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      goal: {
-        type: 'string',
-        description: 'Task goal or initial message',
-      },
-      parentTaskId: {
-        type: 'string',
-        description: 'Optional parent task ID for subtasks',
-      },
-      systemPrompt: {
-        type: 'string',
-        description: 'Optional custom system prompt',
-      },
-    },
-    required: ['goal'],
-  },
-  outputSchema: {
-    type: 'object',
-    properties: {
-      taskId: {
-        type: 'string',
-        description: 'Created task ID',
-      },
-    },
-    required: ['taskId'],
-  },
+  inputSchema: spawnInputSchema,
+  outputSchema: spawnOutputSchema,
 };
 
 const registerSpawnAbility = (
@@ -101,64 +101,96 @@ const registerSpawnAbility = (
   executeTask: (taskId: string) => Promise<void>
 ): void => {
 
-  bus.register(spawnMeta, async (_taskId: string, input: string) => {
-    const { goal, parentTaskId, systemPrompt } = JSON.parse(input);
+  bus.register(spawnMeta, async (_taskId: string, input: string): Promise<AbilityResult<string, string>> => {
+    try {
+      const { goal, parentTaskId, systemPrompt } = JSON.parse(input);
 
-    const taskId = generateId();
-    const task = createTask(taskId, goal, parentTaskId, systemPrompt);
-    const messages = createInitialMessages(taskId, task, goal);
+      const taskId = generateId();
+      const task = createTask(taskId, goal, parentTaskId, systemPrompt);
+      const messages = createInitialMessages(taskId, task, goal);
 
-    await saveTaskAndMessages(bus, task, messages);
+      await saveTaskAndMessages(bus, task, messages);
 
-    registry.set(taskId, {
-      task,
-      messages,
-      isRunning: false,
-      goal,
-      lastActivityTime: Date.now(),
-    });
+      registry.set(taskId, {
+        task,
+        messages,
+        isRunning: false,
+        goal,
+        lastActivityTime: Date.now(),
+      });
 
-    executeTask(taskId).catch((error) => {
-      console.error(`Task ${taskId} execution failed:`, error);
-    });
+      executeTask(taskId).catch((error) => {
+        console.error(`Task ${taskId} execution failed:`, error);
+      });
 
-    return JSON.stringify({ taskId });
+      return {
+        type: 'success',
+        result: JSON.stringify({ taskId })
+      };
+    } catch (error) {
+      return {
+        type: 'error',
+        error: error instanceof Error ? error.message : String(error)
+      };
+    }
   });
 };
+
+const sendInputSchema = z.object({
+  receiverId: z.string().describe('Task ID to receive the message'),
+  message: z.string().describe('Message content to send'),
+});
+
+const sendOutputSchema = z.object({
+  success: z.boolean().describe('Whether the message was sent successfully'),
+  error: z.string().optional().describe('Error message if failed'),
+});
 
 const sendMeta: AbilityMeta = {
   id: 'task:send',
   moduleName: 'task',
   abilityName: 'send',
   description: 'Send a message to a task (inter-task communication)',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      receiverId: {
-        type: 'string',
-        description: 'Task ID to receive the message',
-      },
-      message: {
-        type: 'string',
-        description: 'Message content to send',
-      },
-    },
-    required: ['receiverId', 'message'],
-  },
-  outputSchema: {
-    type: 'object',
-    properties: {
-      success: {
-        type: 'boolean',
-        description: 'Whether the message was sent successfully',
-      },
-      error: {
-        type: 'string',
-        description: 'Error message if failed',
-      },
-    },
-    required: ['success'],
-  },
+  inputSchema: sendInputSchema,
+  outputSchema: sendOutputSchema,
+};
+
+const handleTaskSend = async (
+  receiverId: string,
+  message: string,
+  registry: TaskRegistry,
+  bus: AgentBus,
+  executeTask: (taskId: string) => Promise<void>
+): Promise<{ success: boolean; error?: string }> => {
+  const taskState = registry.get(receiverId);
+  if (!taskState) {
+    return { success: false, error: `Task not found: ${receiverId}` };
+  }
+
+  if (taskState.task.completionStatus !== undefined) {
+    return { success: false, error: `Task ${receiverId} is already completed` };
+  }
+
+  const userMessage: Message = {
+    id: `msg-${Date.now()}-usr`,
+    taskId: receiverId,
+    role: 'user',
+    content: message,
+    timestamp: Date.now(),
+  };
+
+  unwrapInvokeResult(await bus.invoke('ldg:msg:save', 'system', JSON.stringify({ message: userMessage })));
+
+  taskState.messages.push(userMessage);
+  taskState.lastActivityTime = Date.now();
+
+  if (!taskState.isRunning) {
+    executeTask(receiverId).catch((error) => {
+      console.error(`Task ${receiverId} execution failed:`, error);
+    });
+  }
+
+  return { success: true };
 };
 
 const registerSendAbility = (
@@ -166,153 +198,124 @@ const registerSendAbility = (
   bus: AgentBus,
   executeTask: (taskId: string) => Promise<void>
 ): void => {
-
-  bus.register(sendMeta, async (_taskId: string, input: string) => {
-    const { receiverId, message } = JSON.parse(input);
-
-    const taskState = registry.get(receiverId);
-    if (!taskState) {
-      return JSON.stringify({
-        success: false,
-        error: `Task not found: ${receiverId}`,
-      });
+  bus.register(sendMeta, async (_taskId: string, input: string): Promise<AbilityResult<string, string>> => {
+    try {
+      const { receiverId, message } = JSON.parse(input);
+      const result = await handleTaskSend(receiverId, message, registry, bus, executeTask);
+      return { type: 'success', result: JSON.stringify(result) };
+    } catch (error) {
+      return {
+        type: 'error',
+        error: error instanceof Error ? error.message : String(error)
+      };
     }
-
-    if (taskState.task.completionStatus !== undefined) {
-      return JSON.stringify({
-        success: false,
-        error: `Task ${receiverId} is already completed`,
-      });
-    }
-
-    const userMessage: Message = {
-      id: `msg-${Date.now()}-usr`,
-      taskId: receiverId,
-      role: 'user',
-      content: message,
-      timestamp: Date.now(),
-    };
-
-    await bus.invoke('ldg:msg:save', 'system', JSON.stringify({ message: userMessage }));
-
-    taskState.messages.push(userMessage);
-    taskState.lastActivityTime = Date.now();
-
-    if (!taskState.isRunning) {
-      executeTask(receiverId).catch((error) => {
-        console.error(`Task ${receiverId} execution failed:`, error);
-      });
-    }
-
-    return JSON.stringify({ success: true });
   });
 };
+
+const cancelInputSchema = z.object({
+  taskId: z.string().describe('Task to cancel'),
+  reason: z.string().describe('Cancellation reason'),
+});
+
+const cancelOutputSchema = z.object({
+  success: z.boolean(),
+});
 
 const cancelMeta: AbilityMeta = {
   id: 'task:cancel',
   moduleName: 'task',
   abilityName: 'cancel',
   description: 'Cancel a running task',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      taskId: {
-        type: 'string',
-        description: 'Task to cancel',
-      },
-      reason: {
-        type: 'string',
-        description: 'Cancellation reason',
-      },
-    },
-    required: ['taskId', 'reason'],
-  },
-  outputSchema: {
-    type: 'object',
-    properties: {
-      success: {
-        type: 'boolean',
-      },
-    },
-    required: ['success'],
-  },
+  inputSchema: cancelInputSchema,
+  outputSchema: cancelOutputSchema,
 };
 
 const registerCancelAbility = (registry: TaskRegistry, bus: AgentBus): void => {
 
-  bus.register(cancelMeta, async (_taskId: string, input: string) => {
-    const { taskId, reason } = JSON.parse(input);
+  bus.register(cancelMeta, async (_taskId: string, input: string): Promise<AbilityResult<string, string>> => {
+    try {
+      const { taskId, reason } = JSON.parse(input);
 
-    const taskState = registry.get(taskId);
-    if (!taskState) {
-      throw new Error(`Task not found: ${taskId}`);
+      const taskState = registry.get(taskId);
+      if (!taskState) {
+        return {
+          type: 'error',
+          error: `Task not found: ${taskId}`
+        };
+      }
+
+      taskState.task.completionStatus = 'cancelled';
+      taskState.task.updatedAt = Date.now();
+
+      unwrapInvokeResult(await bus.invoke('ldg:task:save', 'system', JSON.stringify({ task: taskState.task })));
+
+      console.log(`Task ${taskId} cancelled: ${reason}`);
+
+      return {
+        type: 'success',
+        result: JSON.stringify({ success: true })
+      };
+    } catch (error) {
+      return {
+        type: 'error',
+        error: error instanceof Error ? error.message : String(error)
+      };
     }
-
-    taskState.task.completionStatus = 'cancelled';
-    taskState.task.updatedAt = Date.now();
-
-    await bus.invoke('ldg:task:save', 'system', JSON.stringify({ task: taskState.task }));
-
-    console.log(`Task ${taskId} cancelled: ${reason}`);
-
-    return JSON.stringify({ success: true });
   });
 };
+
+const activeInputSchema = z.object({
+  limit: z.number().optional().describe('Maximum number of tasks to return'),
+});
+
+const activeOutputSchema = z.object({
+  tasks: z.array(z.object({
+    id: z.string(),
+    goal: z.string(),
+    parentTaskId: z.string().optional(),
+    lastActivityTime: z.number(),
+    messageCount: z.number(),
+    createdAt: z.number(),
+  })),
+});
 
 const activeMeta: AbilityMeta = {
   id: 'task:active',
   moduleName: 'task',
   abilityName: 'active',
   description: 'List all active (in-progress) tasks',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      limit: {
-        type: 'number',
-        description: 'Maximum number of tasks to return',
-      },
-    },
-  },
-  outputSchema: {
-    type: 'object',
-    properties: {
-      tasks: {
-        type: 'array',
-        items: {
-          type: 'object',
-          properties: {
-            id: { type: 'string' },
-            goal: { type: 'string' },
-            parentTaskId: { type: 'string' },
-            lastActivityTime: { type: 'number' },
-            messageCount: { type: 'number' },
-            createdAt: { type: 'number' },
-          },
-        },
-      },
-    },
-    required: ['tasks'],
-  },
+  inputSchema: activeInputSchema,
+  outputSchema: activeOutputSchema,
 };
 
 const registerActiveAbility = (registry: TaskRegistry, bus: AgentBus): void => {
 
-  bus.register(activeMeta, async (_taskId: string, input: string) => {
-    const { limit } = JSON.parse(input) as { limit?: number };
+  bus.register(activeMeta, async (_taskId: string, input: string): Promise<AbilityResult<string, string>> => {
+    try {
+      const { limit } = JSON.parse(input) as { limit?: number };
 
-    const activeTasks = Array.from(registry.values())
-      .filter((state) => state.task.completionStatus === undefined)
-      .slice(0, limit || 100)
-      .map((state) => ({
-        id: state.task.id,
-        goal: state.goal,
-        parentTaskId: state.task.parentTaskId,
-        lastActivityTime: state.lastActivityTime,
-        messageCount: state.messages.length,
-        createdAt: state.task.createdAt,
-      }));
+      const activeTasks = Array.from(registry.values())
+        .filter((state) => state.task.completionStatus === undefined)
+        .slice(0, limit || 100)
+        .map((state) => ({
+          id: state.task.id,
+          goal: state.goal,
+          parentTaskId: state.task.parentTaskId,
+          lastActivityTime: state.lastActivityTime,
+          messageCount: state.messages.length,
+          createdAt: state.task.createdAt,
+        }));
 
-    return JSON.stringify({ tasks: activeTasks });
+      return {
+        type: 'success',
+        result: JSON.stringify({ tasks: activeTasks })
+      };
+    } catch (error) {
+      return {
+        type: 'error',
+        error: error instanceof Error ? error.message : String(error)
+      };
+    }
   });
 };
 

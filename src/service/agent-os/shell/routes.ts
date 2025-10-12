@@ -2,8 +2,16 @@
 
 import { createSSEStream } from './sse';
 
-import type { AgentBus } from '../types';
+import type { AgentBus, InvokeResult } from '../types';
 import type { SendRequest } from './types';
+
+const unwrapInvokeResult = (result: InvokeResult<string, string>): string => {
+  if (result.type === 'success') {
+    return result.result;
+  }
+  const errorMsg = result.type === 'error' ? result.error : result.message;
+  throw new Error(`Invoke failed (${result.type}): ${errorMsg}`);
+};
 
 const validateSendRequest = (body: unknown): SendRequest => {
   if (typeof body !== 'object' || body === null) {
@@ -28,14 +36,14 @@ const sendToExistingTask = async (
   taskId: string,
   message: string
 ): Promise<{ success: boolean; taskId: string; error?: string }> => {
-  const result = await bus.invoke(
+  const result = unwrapInvokeResult(await bus.invoke(
     'task:send',
     'shell',
     JSON.stringify({
       receiverId: taskId,
       message,
     })
-  );
+  ));
   const parsed = JSON.parse(result);
 
   if (!parsed.success) {
@@ -46,13 +54,13 @@ const sendToExistingTask = async (
 };
 
 const createNewTask = async (bus: AgentBus, message: string): Promise<string> => {
-  const result = await bus.invoke(
+  const result = unwrapInvokeResult(await bus.invoke(
     'task:spawn',
     'shell',
     JSON.stringify({
       goal: message,
     })
-  );
+  ));
   const parsed = JSON.parse(result);
   return parsed.taskId;
 };

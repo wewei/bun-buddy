@@ -1,28 +1,37 @@
 // Agent Bus Implementation
 
-import Ajv from 'ajv';
+import { z } from 'zod';
 
 import { registerBusControllerAbilities } from './controller';
 import { registerAbility, unregisterAbility, hasAbility, getAbility } from './registry';
 
 import type { BusState } from './types';
-import type { AgentBus, AbilityMeta, AbilityHandler, CallLogEntry, JSONSchema } from '../types';
+import type { AgentBus, AbilityMeta, AbilityHandler, CallLogEntry, AbilityResult } from '../types';
 
-const ajv = new Ajv();
+type ValidationResult = 
+  | { success: true; data: unknown }
+  | { success: false; error: string };
 
-const validateInput = (input: string, schema: JSONSchema): void => {
+const validateInput = (input: string, schema: z.ZodSchema): ValidationResult => {
   let data: unknown;
   try {
     data = JSON.parse(input);
   } catch (error) {
-    throw new Error(`Invalid JSON input: ${(error as Error).message}`);
+    return { 
+      success: false, 
+      error: `Invalid JSON input: ${(error as Error).message}` 
+    };
   }
 
-  const validate = ajv.compile(schema);
-  if (!validate(data)) {
-    const errors = ajv.errorsText(validate.errors);
-    throw new Error(`Input validation failed: ${errors}`);
+  const result = schema.safeParse(data);
+  if (!result.success) {
+    return { 
+      success: false, 
+      error: `Input validation failed: ${result.error.message}` 
+    };
   }
+
+  return { success: true, data: result.data };
 };
 
 const wrapHandler = (
@@ -30,20 +39,92 @@ const wrapHandler = (
   handler: AbilityHandler,
   meta: AbilityMeta
 ): AbilityHandler => {
-  return async (taskId: string, input: string) => {
+  return async (taskId: string, input: string): Promise<AbilityResult<string, string>> => {
     try {
       // Validate input against schema
-      validateInput(input, meta.inputSchema);
+      const validation = validateInput(input, meta.inputSchema);
+      if (!validation.success) {
+        return { 
+          type: 'error', 
+          error: `Input validation failed for ${abilityId}: ${validation.error}` 
+        };
+      }
       
-      // Execute handler
+      // Execute handler - it should return AbilityResult and never reject
       const result = await handler(taskId, input);
       
       return result;
     } catch (error) {
+      // This should rarely happen since handlers should not throw
+      // But we catch it as a safety net
       const errorMessage = error instanceof Error ? error.message : String(error);
-      throw new Error(`Ability ${abilityId} failed: ${errorMessage}`);
+      return { 
+        type: 'error', 
+        error: `Unexpected error in ${abilityId}: ${errorMessage}` 
+      };
     }
   };
+};
+
+const logInvokeFailure = (
+  state: BusState,
+  logEntry: CallLogEntry,
+  startTime: number,
+  errorType: 'invalid-ability' | 'invalid-input' | 'unknown-failure',
+  errorMessage: string
+) => {
+  logEntry.duration = Date.now() - startTime;
+  logEntry.success = false;
+  logEntry.error = errorMessage;
+  state.callLog.push(logEntry);
+  
+  return { type: errorType, message: errorMessage };
+};
+
+const logInvokeSuccess = (
+  state: BusState,
+  logEntry: CallLogEntry,
+  startTime: number,
+  result: AbilityResult<string, string>
+) => {
+  logEntry.duration = Date.now() - startTime;
+  logEntry.success = result.type === 'success';
+  if (result.type === 'error') {
+    logEntry.error = result.error;
+  }
+  state.callLog.push(logEntry);
+  
+  return result;
+};
+
+const executeInvoke = async (
+  state: BusState,
+  abilityId: string,
+  callerId: string,
+  input: string,
+  startTime: number,
+  logEntry: CallLogEntry
+) => {
+  const ability = getAbility(state, abilityId);
+  if (!ability) {
+    return logInvokeFailure(state, logEntry, startTime, 'invalid-ability', 
+      `Ability not found: ${abilityId}`);
+  }
+
+  const validation = validateInput(input, ability.meta.inputSchema);
+  if (!validation.success) {
+    return logInvokeFailure(state, logEntry, startTime, 'invalid-input', 
+      validation.error);
+  }
+
+  try {
+    const handlerResult = await ability.handler(callerId, input);
+    return logInvokeSuccess(state, logEntry, startTime, handlerResult);
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    return logInvokeFailure(state, logEntry, startTime, 'unknown-failure', 
+      `Handler rejected unexpectedly: ${errorMessage}`);
+  }
 };
 
 export const createAgentBus = (): AgentBus => {
@@ -53,36 +134,15 @@ export const createAgentBus = (): AgentBus => {
   };
 
   const bus: AgentBus = {
-    invoke: async (abilityId: string, callerId: string, input: string): Promise<string> => {
+    invoke: async (abilityId: string, callerId: string, input: string) => {
       const startTime = Date.now();
       const logEntry: CallLogEntry = {
         callerId,
         abilityId,
         timestamp: startTime,
       };
-
-      try {
-        const ability = getAbility(state, abilityId);
-        if (!ability) {
-          throw new Error(`Ability not found: ${abilityId}`);
-        }
-
-        const result = await ability.handler(callerId, input);
-
-        logEntry.duration = Date.now() - startTime;
-        logEntry.success = true;
-        state.callLog.push(logEntry);
-
-        return result;
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        logEntry.duration = Date.now() - startTime;
-        logEntry.success = false;
-        logEntry.error = errorMessage;
-        state.callLog.push(logEntry);
-
-        throw error;
-      }
+      
+      return executeInvoke(state, abilityId, callerId, input, startTime, logEntry);
     },
 
     register: (meta: AbilityMeta, handler: AbilityHandler): void => {

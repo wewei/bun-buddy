@@ -1,6 +1,6 @@
 // Task Execution Loop
 
-import type { AgentBus, Message } from '../types';
+import type { AgentBus, Message, InvokeResult } from '../types';
 import type { TaskRegistry, TaskState } from './types';
 import type { ChatMessage, ToolCall } from '../model/types';
 
@@ -15,6 +15,14 @@ type ToolDefinition = {
 
 const generateMessageId = (): string => {
   return `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+};
+
+const unwrapInvokeResult = (result: InvokeResult<string, string>): string => {
+  if (result.type === 'success') {
+    return result.result;
+  }
+  const errorMsg = result.type === 'error' ? result.error : result.message;
+  throw new Error(`Invoke failed (${result.type}): ${errorMsg}`);
 };
 
 const convertToLLMMessages = (messages: Message[]): ChatMessage[] => {
@@ -69,7 +77,7 @@ const streamContentToUser = async (
 
 const generateToolsFromBus = async (bus: AgentBus, taskId: string): Promise<ToolDefinition[]> => {
   // Get all modules
-  const modulesResult = await bus.invoke('bus:list', taskId, '{}');
+  const modulesResult = unwrapInvokeResult(await bus.invoke('bus:list', taskId, '{}'));
   const { modules } = JSON.parse(modulesResult);
 
   const tools: ToolDefinition[] = [];
@@ -80,19 +88,19 @@ const generateToolsFromBus = async (bus: AgentBus, taskId: string): Promise<Tool
       continue;
     }
 
-    const abilitiesResult = await bus.invoke(
+    const abilitiesResult = unwrapInvokeResult(await bus.invoke(
       'bus:abilities',
       taskId,
       JSON.stringify({ moduleName: module.name })
-    );
+    ));
     const { abilities } = JSON.parse(abilitiesResult);
 
     for (const ability of abilities) {
-      const schemaResult = await bus.invoke(
+      const schemaResult = unwrapInvokeResult(await bus.invoke(
         'bus:schema',
         taskId,
         JSON.stringify({ abilityId: ability.id })
-      );
+      ));
       const { inputSchema } = JSON.parse(schemaResult);
 
       tools.push({
@@ -121,7 +129,7 @@ const executeToolCall = async (
   console.log(`Task ${taskId} - Executing tool: ${abilityId}`);
 
   try {
-    const toolResult = await bus.invoke(abilityId, taskId, args);
+    const toolResult = unwrapInvokeResult(await bus.invoke(abilityId, taskId, args));
     console.log(`Task ${taskId} - Tool result: ${toolResult.substring(0, 100)}...`);
 
     const toolMessage: Message = {
@@ -132,7 +140,7 @@ const executeToolCall = async (
       timestamp: Date.now(),
     };
 
-    await bus.invoke('ldg:msg:save', 'system', JSON.stringify({ message: toolMessage }));
+    unwrapInvokeResult(await bus.invoke('ldg:msg:save', 'system', JSON.stringify({ message: toolMessage })));
     messages.push(toolMessage);
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -146,7 +154,7 @@ const executeToolCall = async (
       timestamp: Date.now(),
     };
 
-    await bus.invoke('ldg:msg:save', 'system', JSON.stringify({ message: errorMsg }));
+    unwrapInvokeResult(await bus.invoke('ldg:msg:save', 'system', JSON.stringify({ message: errorMsg })));
     messages.push(errorMsg);
   }
 };
@@ -177,7 +185,7 @@ const processLLMResponse = async (
     timestamp: Date.now(),
   };
 
-  await bus.invoke('ldg:msg:save', 'system', JSON.stringify({ message: assistantMessage }));
+  unwrapInvokeResult(await bus.invoke('ldg:msg:save', 'system', JSON.stringify({ message: assistantMessage })));
   messages.push(assistantMessage);
 
   if (toolCalls && toolCalls.length > 0) {
@@ -193,7 +201,7 @@ const processLLMResponse = async (
 const completeTask = async (taskId: string, taskState: TaskState, bus: AgentBus): Promise<void> => {
   taskState.task.completionStatus = 'success';
   taskState.task.updatedAt = Date.now();
-  await bus.invoke('ldg:task:save', 'system', JSON.stringify({ task: taskState.task }));
+  unwrapInvokeResult(await bus.invoke('ldg:task:save', 'system', JSON.stringify({ task: taskState.task })));
   console.log(`Task ${taskId} completed successfully`);
 };
 
@@ -209,7 +217,7 @@ const failTask = async (
   taskState.task.completionStatus = `failed: ${errorMessage}`;
   taskState.task.updatedAt = Date.now();
 
-  await bus.invoke('ldg:task:save', 'system', JSON.stringify({ task: taskState.task }));
+  unwrapInvokeResult(await bus.invoke('ldg:task:save', 'system', JSON.stringify({ task: taskState.task })));
   await streamContentToUser(taskId, `Error: ${errorMessage}`, bus);
 };
 
@@ -217,7 +225,7 @@ const getDefaultLLMProvider = async (
   bus: AgentBus,
   taskId: string
 ): Promise<{ provider: string; model: string }> => {
-  const result = await bus.invoke('model:listLLM', taskId, '{}');
+  const result = unwrapInvokeResult(await bus.invoke('model:listLLM', taskId, '{}'));
   const { providers } = JSON.parse(result) as {
     providers: Array<{ providerName: string; models: string[] }>;
   };
@@ -262,7 +270,7 @@ const runExecutionLoop = async (
       tools,
     };
 
-    const llmResult = await bus.invoke('model:llm', taskId, JSON.stringify(llmInput));
+    const llmResult = unwrapInvokeResult(await bus.invoke('model:llm', taskId, JSON.stringify(llmInput)));
     continueLoop = await processLLMResponse(taskId, llmResult, messages, bus);
   }
 };

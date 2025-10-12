@@ -60,10 +60,23 @@
 ### 类型定义
 
 ```typescript
+// 能力执行结果（能力内部返回）
+type AbilityResult<R, E> = 
+  | { type: 'success'; result: R }
+  | { type: 'error'; error: E };
+
+// Invoke 调用结果（Bus 返回给调用者）
+type InvokeResult<R, E> = 
+  | { type: 'invalid-ability'; message: string }
+  | { type: 'invalid-input'; message: string }
+  | { type: 'unknown-failure'; message: string }
+  | AbilityResult<R, E>;
+
 // 能力处理器签名
 // taskId: 调用方任务 ID，用于追踪和上下文传递
 // input: JSON 编码的参数
-type AbilityHandler = (taskId: string, input: string) => Promise<string>;
+// 返回: AbilityResult，永不 reject
+type AbilityHandler = (taskId: string, input: string) => Promise<AbilityResult<string, string>>;
 
 // 能力元数据
 type AbilityMeta = {
@@ -71,8 +84,8 @@ type AbilityMeta = {
   moduleName: string;                   // 例如 'task'
   abilityName: string;                  // 例如 'spawn'
   description: string;
-  inputSchema: JSONSchema;              // 用于输入验证的 JSON Schema
-  outputSchema: JSONSchema;             // 输出的 JSON Schema
+  inputSchema: z.ZodSchema;             // Zod schema 用于输入验证
+  outputSchema: z.ZodSchema;            // 输出的 Zod schema
   tags?: string[];                      // 可选的分类标签
 };
 
@@ -88,7 +101,8 @@ type AgentBus = {
   // abilityId: 能力标识符（如 'task:spawn'）
   // callerId: 调用方任务 ID，用于追踪和审计
   // input: JSON 编码的参数
-  invoke: (abilityId: string, callerId: string, input: string) => Promise<string>;
+  // 返回: InvokeResult，永不 reject
+  invoke: (abilityId: string, callerId: string, input: string) => Promise<InvokeResult<string, string>>;
   
   // 注册新能力
   register: (meta: AbilityMeta, handler: AbilityHandler) => void;
@@ -110,46 +124,51 @@ type AgentBus = {
 ```typescript
 // 基本使用示例
 const result = await bus.invoke(
-  'task-abc123',              // callerId - 调用方任务 ID
   'task:spawn',               // abilityId - 能力标识符
+  'task-abc123',              // callerId - 调用方任务 ID
   JSON.stringify({            // input - JSON 编码的参数
     goal: 'Analyze sales data'
   })
 );
 
-const { taskId } = JSON.parse(result);
-console.log(`Created task: ${taskId}`);
+// 处理结果
+if (result.type === 'success') {
+  const { taskId } = JSON.parse(result.result);
+  console.log(`Created task: ${taskId}`);
+} else {
+  console.error(`Error: ${result.message || result.error}`);
+}
 ```
 
 **参数说明**：
 
-1. **callerId**：调用方的任务 ID
+1. **abilityId**：目标能力的唯一标识符
+   - 格式：`${moduleName}:${abilityName}`
+   - 例如：`task:spawn`、`mem:retrieve`、`shell:send`
+
+2. **callerId**：调用方的任务 ID
    - 用于追踪能力调用链
    - 用于审计和调试
    - 用于权限控制（未来）
 
-2. **abilityId**：目标能力的唯一标识符
-   - 格式：`${moduleName}:${abilityName}`
-   - 例如：`task:spawn`、`mem:retrieve`、`shell:sendMessageChunk`
-
 3. **input**：JSON 编码的参数字符串
-   - 必须符合能力的 inputSchema
-   - 由总线自动验证
+   - 必须符合能力的 inputSchema（Zod schema）
+   - 由总线使用 Zod 自动验证
 
 **调用示例**：
 
 ```typescript
 // 从任务中检索记忆
 const memResult = await bus.invoke(
-  'task-xyz789',
   'mem:retrieve',
+  'task-xyz789',
   JSON.stringify({ query: 'sales data Q1' })
 );
 
 // 向用户发送消息片段
-await bus.invoke(
-  'task-abc123',
+const shellResult = await bus.invoke(
   'shell:send',
+  'task-abc123',
   JSON.stringify({
     content: 'Processing your request...',
     messageId: 'msg-001',
@@ -159,13 +178,90 @@ await bus.invoke(
 
 // 任务间通信
 const sendResult = await bus.invoke(
-  'task-parent',
   'task:send',
+  'task-parent',
   JSON.stringify({
     receiverId: 'task-child',
     message: 'Continue with next step'
   })
 );
+```
+
+#### 标准化错误处理
+
+**核心原则：永不 reject**
+
+Agent Bus 采用标准化的错误处理机制：
+
+1. **invoke 返回的 Promise 永不 reject**
+   - 所有错误都通过 `InvokeResult` 类型返回
+   - 调用方无需使用 try-catch 捕获 rejection
+
+2. **能力 handler 返回的 Promise 也永不 reject**
+   - Handler 必须返回 `AbilityResult<R, E>` 类型
+   - 所有错误都包装为 `{ type: 'error', error: E }`
+
+3. **错误类型分类**：
+
+```typescript
+// InvokeResult 的四种可能结果：
+
+// 1. 能力不存在
+{ type: 'invalid-ability', message: 'Ability not found: xxx' }
+
+// 2. 输入验证失败（不符合 Zod schema）
+{ type: 'invalid-input', message: 'Input validation failed: ...' }
+
+// 3. Handler 意外 reject（不应该发生）
+{ type: 'unknown-failure', message: 'Handler rejected unexpectedly: ...' }
+
+// 4. 成功执行（返回 AbilityResult）
+{ type: 'success', result: '...' }  // 或
+{ type: 'error', error: '...' }     // 业务逻辑错误
+```
+
+**错误处理示例**：
+
+```typescript
+// 方式 1：完整处理所有情况
+const result = await bus.invoke('task:spawn', 'caller-1', JSON.stringify({ goal: 'test' }));
+
+switch (result.type) {
+  case 'invalid-ability':
+    console.error('Ability not found:', result.message);
+    break;
+  
+  case 'invalid-input':
+    console.error('Invalid input:', result.message);
+    break;
+  
+  case 'unknown-failure':
+    console.error('Unexpected failure:', result.message);
+    break;
+  
+  case 'success':
+    const data = JSON.parse(result.result);
+    console.log('Success:', data);
+    break;
+  
+  case 'error':
+    console.error('Business error:', result.error);
+    break;
+}
+
+// 方式 2：使用帮助函数简化（适合已知能力存在的场景）
+const unwrapResult = (result: InvokeResult<string, string>): string => {
+  if (result.type === 'success') return result.result;
+  const msg = result.message || result.error;
+  throw new Error(`Invoke failed (${result.type}): ${msg}`);
+};
+
+try {
+  const data = unwrapResult(await bus.invoke('task:spawn', 'caller-1', input));
+  console.log('Task created:', JSON.parse(data).taskId);
+} catch (error) {
+  console.error('Failed to create task:', error);
+}
 ```
 
 ### 注册 API
@@ -175,6 +271,19 @@ const sendResult = await bus.invoke(
 在总线上注册新能力：
 
 ```typescript
+import { z } from 'zod';
+
+// 定义 Zod schemas
+const inputSchema = z.object({
+  goal: z.string().describe('Task goal'),
+  parentTaskId: z.string().optional().describe('Parent task ID')
+});
+
+const outputSchema = z.object({
+  taskId: z.string(),
+  status: z.enum(['pending', 'running'])
+});
+
 // 示例：注册 task:spawn 能力
 bus.register(
   {
@@ -182,32 +291,32 @@ bus.register(
     moduleName: 'task',
     abilityName: 'spawn',
     description: 'Create a new task',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        goal: { type: 'string', description: 'Task goal' },
-        parentTaskId: { type: 'string', description: 'Parent task ID' }
-      },
-      required: ['goal']
-    },
-    outputSchema: {
-      type: 'object',
-      properties: {
-        taskId: { type: 'string' },
-        status: { type: 'string', enum: ['pending', 'running'] }
-      },
-      required: ['taskId', 'status']
-    }
+    inputSchema,
+    outputSchema
   },
-  async (input: string) => {
-    const { goal, parentTaskId } = JSON.parse(input);
-    const task = createTask(goal, parentTaskId);
-    return JSON.stringify({ taskId: task.id, status: task.status });
+  async (taskId: string, input: string): Promise<AbilityResult<string, string>> => {
+    try {
+      const { goal, parentTaskId } = JSON.parse(input);
+      const task = createTask(goal, parentTaskId);
+      return { 
+        type: 'success', 
+        result: JSON.stringify({ taskId: task.id, status: task.status }) 
+      };
+    } catch (error) {
+      return { 
+        type: 'error', 
+        error: error instanceof Error ? error.message : String(error) 
+      };
+    }
   }
 );
 ```
 
-**注意**：处理器函数只接收 `input` 参数。`callerId` 由总线管理，用于审计和追踪，但不传递给处理器。如果能力需要知道调用者，应在 `input` 中显式包含。
+**注意**：
+- 处理器函数接收两个参数：`taskId`（调用方任务 ID）和 `input`（JSON 编码的参数）
+- 处理器必须返回 `AbilityResult<R, E>` 类型，永不 reject
+- 使用 `try-catch` 捕获所有异常，并返回 `{ type: 'error', error }` 而非抛出
+- Input validation 由总线使用 Zod 自动完成，handler 无需再次验证
 
 #### unregister()
 
