@@ -45,28 +45,29 @@ Content-Type: application/json
 async function handleSend(req: Request): Promise<Response> {
   const { message, taskId } = await req.json();
   
-  if (taskId) {
-    // 向现有任务发送消息
-    const result = await bus.invoke(
-      'shell',                          // callerId
-      'task:send',                       // abilityId
-      JSON.stringify({
-        receiverId: taskId,
-        message
-      })
-    );
-    return Response.json(JSON.parse(result));
-  } else {
-    // 创建新任务
-    const result = await bus.invoke(
-      'shell',                          // callerId
-      'task:spawn',                      // abilityId
-      JSON.stringify({ goal: message })
-    );
-    return Response.json(JSON.parse(result));
-  }
+  // 确定接收方任务 ID
+  // 如果指定了 taskId，发送给指定任务
+  // 否则发送给路由任务（由路由任务决定如何处理）
+  const receiverId = taskId || ROUTER_TASK_ID;
+  
+  // 通过 task:send 发送消息
+  const result = await bus.invoke(
+    'shell',                          // callerId
+    'task:send',                      // abilityId
+    JSON.stringify({
+      receiverId,
+      message
+    })
+  );
+  
+  return Response.json(JSON.parse(result));
 }
 ```
+
+**说明**：
+- Shell 不再直接调用 `task:spawn` 或 `task:route`
+- 所有消息都通过 `task:send` 发送
+- 消息路由由专门的路由任务负责
 
 ### 2. GET /stream/:taskId - 流式传输任务输出
 
@@ -552,8 +553,7 @@ await shell.start(3000);
 **Shell 依赖的能力**：
 
 **必需**：
-- `task:spawn` - 创建新任务
-- `task:send` - 向任务发送消息
+- `task:send` - 向路由任务或其他任务发送消息
 
 **可选**（用于检查）：
 - `task:list` - 列出任务
@@ -569,7 +569,7 @@ await shell.start(3000);
 
 ```typescript
 const verifyDependencies = async (bus: AgentBus): Promise<void> => {
-  const required = ['task:spawn', 'task:send'];
+  const required = ['task:send'];
   
   for (const abilityId of required) {
     if (!bus.has(abilityId)) {

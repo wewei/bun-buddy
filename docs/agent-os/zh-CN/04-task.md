@@ -144,79 +144,23 @@ Call ──startMessageId─┤
 
 ### 消息路由
 
-当 Agent 收到用户消息时，Task Manager 对其进行路由：
+消息路由现在由专门的**路由任务**处理，而不是 Task Manager 的能力：
 
-1. **调用 `task:route`** 传入消息内容
-2. **如果路由返回 taskId**：将消息追加到该任务
-3. **如果路由返回 null**：使用 `task:create` 创建新任务
-4. **恢复/启动执行** 目标任务
+1. **Shell 接收用户消息**
+2. **Shell 将消息发送给路由任务**（通过 `task:send`）
+3. **路由任务**分析消息并决定：
+   - 如果应路由到现有任务：调用 `task:send` 将消息发送给目标任务
+   - 如果需要创建新任务：调用 `task:spawn` 创建新任务
+4. **目标任务接收消息后启动执行**
+
+**设计优势**：
+- 路由逻辑本身是一个任务，可以使用 LLM 进行智能路由
+- 所有消息传递统一通过 `task:send`
+- Task Manager 职责更加纯粹和简单
 
 ## 注册的能力
 
 Task Manager 在 Agent Bus 上注册以下能力：
-
-### task:route
-
-**描述**：将用户消息路由到适当的活动任务，或指示应创建新任务。
-
-**输入模式**：
-```json
-{
-  "type": "object",
-  "properties": {
-    "message": {
-      "type": "string",
-      "description": "用户消息内容"
-    }
-  },
-  "required": ["message"]
-}
-```
-
-**输出模式**：
-```json
-{
-  "type": "object",
-  "properties": {
-    "taskId": {
-      "type": ["string", "null"],
-      "description": "目标任务 ID，或 null 创建新任务"
-    },
-    "confidence": {
-      "type": "number",
-      "description": "路由置信度（0-1）"
-    }
-  },
-  "required": ["taskId"]
-}
-```
-
-**示例**：
-```typescript
-const result = await bus.invoke(
-  'shell',                      // callerId
-  'task:route',                 // abilityId
-  JSON.stringify({
-    message: 'Can you also check Q2 data?'
-  })
-);
-
-const { taskId, confidence } = JSON.parse(result);
-if (taskId) {
-  // 路由到现有任务
-  await bus.invoke('shell', 'task:send', JSON.stringify({
-    receiverId: taskId,
-    message: 'Can you also check Q2 data?'
-  }));
-} else {
-  // 创建新任务
-  await bus.invoke('shell', 'task:spawn', JSON.stringify({
-    goal: 'Can you also check Q2 data?'
-  }));
-}
-```
-
-**路由策略**：参见[消息路由](#消息路由)部分。
 
 ### task:spawn
 
