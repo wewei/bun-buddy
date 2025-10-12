@@ -1,30 +1,146 @@
 // Ledger Abilities
 
 import { z } from 'zod';
+
 import type { AgentBus, AbilityMeta, Task, Call, Message, AbilityResult } from '../types';
 import type { Ledger } from './types';
 
+// Schema definitions
+const LEDGER_TASK_SAVE_INPUT_SCHEMA = z.object({
+  task: z.any().describe('Task entity to save'),
+});
+
+const LEDGER_TASK_SAVE_OUTPUT_SCHEMA = z.object({
+  success: z.boolean(),
+});
+
+const LEDGER_TASK_GET_INPUT_SCHEMA = z.object({
+  taskId: z.string(),
+});
+
+const LEDGER_TASK_GET_OUTPUT_SCHEMA = z.object({
+  task: z.any().nullable().describe('Task entity or null if not found'),
+});
+
+const LEDGER_TASK_QUERY_INPUT_SCHEMA = z.object({
+  completionStatus: z.string().optional(),
+  parentTaskId: z.string().optional(),
+  fromTime: z.number().optional(),
+  toTime: z.number().optional(),
+  limit: z.number().optional(),
+  offset: z.number().optional(),
+});
+
+const LEDGER_TASK_QUERY_OUTPUT_SCHEMA = z.object({
+  tasks: z.array(z.any()),
+  total: z.number(),
+});
+
+const LEDGER_CALL_SAVE_INPUT_SCHEMA = z.object({
+  call: z.any().describe('Call entity to save'),
+});
+
+const LEDGER_CALL_SAVE_OUTPUT_SCHEMA = z.object({
+  success: z.boolean(),
+});
+
+const LEDGER_CALL_LIST_INPUT_SCHEMA = z.object({
+  taskId: z.string(),
+});
+
+const LEDGER_CALL_LIST_OUTPUT_SCHEMA = z.object({
+  calls: z.array(z.any()),
+});
+
+const LEDGER_MSG_SAVE_INPUT_SCHEMA = z.object({
+  message: z.any().describe('Message entity to save'),
+});
+
+const LEDGER_MSG_SAVE_OUTPUT_SCHEMA = z.object({
+  success: z.boolean(),
+  messageId: z.string(),
+});
+
+const LEDGER_MSG_LIST_INPUT_SCHEMA = z.object({
+  taskId: z.string(),
+  limit: z.number().optional(),
+  offset: z.number().optional(),
+});
+
+const LEDGER_MSG_LIST_OUTPUT_SCHEMA = z.object({
+  messages: z.array(z.any()),
+  total: z.number(),
+});
+
+// Meta definitions
+const LEDGER_TASK_SAVE_META: AbilityMeta = {
+  id: 'ldg:task:save',
+  moduleName: 'ldg',
+  abilityName: 'task:save',
+  description: 'Save or update a task',
+  inputSchema: LEDGER_TASK_SAVE_INPUT_SCHEMA,
+  outputSchema: LEDGER_TASK_SAVE_OUTPUT_SCHEMA,
+};
+
+const LEDGER_TASK_GET_META: AbilityMeta = {
+  id: 'ldg:task:get',
+  moduleName: 'ldg',
+  abilityName: 'task:get',
+  description: 'Get a task by ID',
+  inputSchema: LEDGER_TASK_GET_INPUT_SCHEMA,
+  outputSchema: LEDGER_TASK_GET_OUTPUT_SCHEMA,
+};
+
+const LEDGER_TASK_QUERY_META: AbilityMeta = {
+  id: 'ldg:task:query',
+  moduleName: 'ldg',
+  abilityName: 'task:query',
+  description: 'Query tasks with filters',
+  inputSchema: LEDGER_TASK_QUERY_INPUT_SCHEMA,
+  outputSchema: LEDGER_TASK_QUERY_OUTPUT_SCHEMA,
+};
+
+const LEDGER_CALL_SAVE_META: AbilityMeta = {
+  id: 'ldg:call:save',
+  moduleName: 'ldg',
+  abilityName: 'call:save',
+  description: 'Save or update a call',
+  inputSchema: LEDGER_CALL_SAVE_INPUT_SCHEMA,
+  outputSchema: LEDGER_CALL_SAVE_OUTPUT_SCHEMA,
+};
+
+const LEDGER_CALL_LIST_META: AbilityMeta = {
+  id: 'ldg:call:list',
+  moduleName: 'ldg',
+  abilityName: 'call:list',
+  description: 'List calls for a task',
+  inputSchema: LEDGER_CALL_LIST_INPUT_SCHEMA,
+  outputSchema: LEDGER_CALL_LIST_OUTPUT_SCHEMA,
+};
+
+const LEDGER_MSG_SAVE_META: AbilityMeta = {
+  id: 'ldg:msg:save',
+  moduleName: 'ldg',
+  abilityName: 'msg:save',
+  description: 'Save a message (immutable)',
+  inputSchema: LEDGER_MSG_SAVE_INPUT_SCHEMA,
+  outputSchema: LEDGER_MSG_SAVE_OUTPUT_SCHEMA,
+};
+
+const LEDGER_MSG_LIST_META: AbilityMeta = {
+  id: 'ldg:msg:list',
+  moduleName: 'ldg',
+  abilityName: 'msg:list',
+  description: 'List messages for a task',
+  inputSchema: LEDGER_MSG_LIST_INPUT_SCHEMA,
+  outputSchema: LEDGER_MSG_LIST_OUTPUT_SCHEMA,
+};
+
 const registerTaskSaveAbility = (ledger: Ledger, bus: AgentBus): void => {
-  const inputSchema = z.object({
-    task: z.any().describe('Task entity to save'),
-  });
-
-  const outputSchema = z.object({
-    success: z.boolean(),
-  });
-
-  const taskSaveMeta: AbilityMeta = {
-    id: 'ldg:task:save',
-    moduleName: 'ldg',
-    abilityName: 'task:save',
-    description: 'Save or update a task',
-    inputSchema,
-    outputSchema,
-  };
-
-  bus.register(taskSaveMeta, async (_taskId: string, input: string): Promise<AbilityResult<string, string>> => {
+  bus.register(LEDGER_TASK_SAVE_META, async (_taskId: string, input: string): Promise<AbilityResult<string, string>> => {
     try {
-      const { task } = JSON.parse(input) as { task: Task };
+      const parsed = LEDGER_TASK_SAVE_INPUT_SCHEMA.parse(JSON.parse(input));
+      const { task } = parsed as { task: Task };
       await ledger.saveTask(task);
       return {
         type: 'success',
@@ -40,26 +156,9 @@ const registerTaskSaveAbility = (ledger: Ledger, bus: AgentBus): void => {
 };
 
 const registerTaskGetAbility = (ledger: Ledger, bus: AgentBus): void => {
-  const inputSchema = z.object({
-    taskId: z.string(),
-  });
-
-  const outputSchema = z.object({
-    task: z.any().nullable().describe('Task entity or null if not found'),
-  });
-
-  const taskGetMeta: AbilityMeta = {
-    id: 'ldg:task:get',
-    moduleName: 'ldg',
-    abilityName: 'task:get',
-    description: 'Get a task by ID',
-    inputSchema,
-    outputSchema,
-  };
-
-  bus.register(taskGetMeta, async (_taskId: string, input: string): Promise<AbilityResult<string, string>> => {
+  bus.register(LEDGER_TASK_GET_META, async (_taskId: string, input: string): Promise<AbilityResult<string, string>> => {
     try {
-      const { taskId } = JSON.parse(input);
+      const { taskId } = LEDGER_TASK_GET_INPUT_SCHEMA.parse(JSON.parse(input));
       const task = await ledger.getTask(taskId);
       return {
         type: 'success',
@@ -75,32 +174,9 @@ const registerTaskGetAbility = (ledger: Ledger, bus: AgentBus): void => {
 };
 
 const registerTaskQueryAbility = (ledger: Ledger, bus: AgentBus): void => {
-  const inputSchema = z.object({
-    completionStatus: z.string().optional(),
-    parentTaskId: z.string().optional(),
-    fromTime: z.number().optional(),
-    toTime: z.number().optional(),
-    limit: z.number().optional(),
-    offset: z.number().optional(),
-  });
-
-  const outputSchema = z.object({
-    tasks: z.array(z.any()),
-    total: z.number(),
-  });
-
-  const taskQueryMeta: AbilityMeta = {
-    id: 'ldg:task:query',
-    moduleName: 'ldg',
-    abilityName: 'task:query',
-    description: 'Query tasks with filters',
-    inputSchema,
-    outputSchema,
-  };
-
-  bus.register(taskQueryMeta, async (_taskId: string, input: string): Promise<AbilityResult<string, string>> => {
+  bus.register(LEDGER_TASK_QUERY_META, async (_taskId: string, input: string): Promise<AbilityResult<string, string>> => {
     try {
-      const options = JSON.parse(input);
+      const options = LEDGER_TASK_QUERY_INPUT_SCHEMA.parse(JSON.parse(input));
       const result = await ledger.queryTasks(options);
       return {
         type: 'success',
@@ -116,26 +192,10 @@ const registerTaskQueryAbility = (ledger: Ledger, bus: AgentBus): void => {
 };
 
 const registerCallSaveAbility = (ledger: Ledger, bus: AgentBus): void => {
-  const inputSchema = z.object({
-    call: z.any().describe('Call entity to save'),
-  });
-
-  const outputSchema = z.object({
-    success: z.boolean(),
-  });
-
-  const callSaveMeta: AbilityMeta = {
-    id: 'ldg:call:save',
-    moduleName: 'ldg',
-    abilityName: 'call:save',
-    description: 'Save or update a call',
-    inputSchema,
-    outputSchema,
-  };
-
-  bus.register(callSaveMeta, async (_taskId: string, input: string): Promise<AbilityResult<string, string>> => {
+  bus.register(LEDGER_CALL_SAVE_META, async (_taskId: string, input: string): Promise<AbilityResult<string, string>> => {
     try {
-      const { call } = JSON.parse(input) as { call: Call };
+      const parsed = LEDGER_CALL_SAVE_INPUT_SCHEMA.parse(JSON.parse(input));
+      const { call } = parsed as { call: Call };
       await ledger.saveCall(call);
       return {
         type: 'success',
@@ -151,26 +211,9 @@ const registerCallSaveAbility = (ledger: Ledger, bus: AgentBus): void => {
 };
 
 const registerCallListAbility = (ledger: Ledger, bus: AgentBus): void => {
-  const inputSchema = z.object({
-    taskId: z.string(),
-  });
-
-  const outputSchema = z.object({
-    calls: z.array(z.any()),
-  });
-
-  const callListMeta: AbilityMeta = {
-    id: 'ldg:call:list',
-    moduleName: 'ldg',
-    abilityName: 'call:list',
-    description: 'List calls for a task',
-    inputSchema,
-    outputSchema,
-  };
-
-  bus.register(callListMeta, async (_taskId: string, input: string): Promise<AbilityResult<string, string>> => {
+  bus.register(LEDGER_CALL_LIST_META, async (_taskId: string, input: string): Promise<AbilityResult<string, string>> => {
     try {
-      const { taskId } = JSON.parse(input);
+      const { taskId } = LEDGER_CALL_LIST_INPUT_SCHEMA.parse(JSON.parse(input));
       const calls = await ledger.listCalls({ taskId });
       return {
         type: 'success',
@@ -186,27 +229,10 @@ const registerCallListAbility = (ledger: Ledger, bus: AgentBus): void => {
 };
 
 const registerMsgSaveAbility = (ledger: Ledger, bus: AgentBus): void => {
-  const inputSchema = z.object({
-    message: z.any().describe('Message entity to save'),
-  });
-
-  const outputSchema = z.object({
-    success: z.boolean(),
-    messageId: z.string(),
-  });
-
-  const msgSaveMeta: AbilityMeta = {
-    id: 'ldg:msg:save',
-    moduleName: 'ldg',
-    abilityName: 'msg:save',
-    description: 'Save a message (immutable)',
-    inputSchema,
-    outputSchema,
-  };
-
-  bus.register(msgSaveMeta, async (_taskId: string, input: string): Promise<AbilityResult<string, string>> => {
+  bus.register(LEDGER_MSG_SAVE_META, async (_taskId: string, input: string): Promise<AbilityResult<string, string>> => {
     try {
-      const { message } = JSON.parse(input) as { message: Message };
+      const parsed = LEDGER_MSG_SAVE_INPUT_SCHEMA.parse(JSON.parse(input));
+      const { message } = parsed as { message: Message };
       const messageId = await ledger.saveMessage(message);
       return {
         type: 'success',
@@ -222,29 +248,9 @@ const registerMsgSaveAbility = (ledger: Ledger, bus: AgentBus): void => {
 };
 
 const registerMsgListAbility = (ledger: Ledger, bus: AgentBus): void => {
-  const inputSchema = z.object({
-    taskId: z.string(),
-    limit: z.number().optional(),
-    offset: z.number().optional(),
-  });
-
-  const outputSchema = z.object({
-    messages: z.array(z.any()),
-    total: z.number(),
-  });
-
-  const msgListMeta: AbilityMeta = {
-    id: 'ldg:msg:list',
-    moduleName: 'ldg',
-    abilityName: 'msg:list',
-    description: 'List messages for a task',
-    inputSchema,
-    outputSchema,
-  };
-
-  bus.register(msgListMeta, async (_taskId: string, input: string): Promise<AbilityResult<string, string>> => {
+  bus.register(LEDGER_MSG_LIST_META, async (_taskId: string, input: string): Promise<AbilityResult<string, string>> => {
     try {
-      const options = JSON.parse(input);
+      const options = LEDGER_MSG_LIST_INPUT_SCHEMA.parse(JSON.parse(input));
       const result = await ledger.listMessages(options);
       return {
         type: 'success',

@@ -1,33 +1,36 @@
 // Shell Abilities
 
 import { z } from 'zod';
+
 import { sendSSEEvent } from './sse';
 
 import type { AgentBus, AbilityMeta, AbilityResult } from '../types';
 
-const inputSchema = z.object({
+// Schema definitions
+const SHELL_SEND_INPUT_SCHEMA = z.object({
   content: z.string().describe('Message content chunk'),
   messageId: z.string().describe('Unique message identifier for assembling multiple chunks'),
   index: z.number().describe('Chunk index. >= 0 means more chunks coming, < 0 means message end'),
 });
 
-const outputSchema = z.object({
+const SHELL_SEND_OUTPUT_SCHEMA = z.object({
   success: z.boolean().describe('Whether the message was successfully sent'),
   error: z.string().optional().describe('Error message if failed'),
 });
 
-const sendMeta: AbilityMeta = {
+// Meta definitions
+const SHELL_SEND_META: AbilityMeta = {
   id: 'shell:send',
   moduleName: 'shell',
   abilityName: 'send',
   description: 'Send message chunk to user via SSE',
-  inputSchema,
-  outputSchema,
+  inputSchema: SHELL_SEND_INPUT_SCHEMA,
+  outputSchema: SHELL_SEND_OUTPUT_SCHEMA,
 };
 
 const handleShellSend = async (taskId: string, input: string): Promise<AbilityResult<string, string>> => {
   try {
-    const { content, messageId, index } = JSON.parse(input);
+    const { content, messageId, index } = SHELL_SEND_INPUT_SCHEMA.parse(JSON.parse(input));
 
     const success = sendSSEEvent(taskId, {
       type: 'content',
@@ -68,6 +71,6 @@ const handleShellSend = async (taskId: string, input: string): Promise<AbilityRe
 };
 
 export const registerShellAbilities = (bus: AgentBus): void => {
-  bus.register(sendMeta, handleShellSend);
+  bus.register(SHELL_SEND_META, handleShellSend);
 };
 

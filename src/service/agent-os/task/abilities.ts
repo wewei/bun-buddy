@@ -5,6 +5,88 @@ import { z } from 'zod';
 import type { AgentBus, AbilityMeta, Task, Message, AbilityResult } from '../types';
 import type { TaskRegistry } from './types';
 
+// Schema definitions
+const TASK_SPAWN_INPUT_SCHEMA = z.object({
+  goal: z.string().describe('Task goal or initial message'),
+  parentTaskId: z.string().optional().describe('Optional parent task ID for subtasks'),
+  systemPrompt: z.string().optional().describe('Optional custom system prompt'),
+});
+
+const TASK_SPAWN_OUTPUT_SCHEMA = z.object({
+  taskId: z.string().describe('Created task ID'),
+});
+
+const TASK_SEND_INPUT_SCHEMA = z.object({
+  receiverId: z.string().describe('Task ID to receive the message'),
+  message: z.string().describe('Message content to send'),
+});
+
+const TASK_SEND_OUTPUT_SCHEMA = z.object({
+  success: z.boolean().describe('Whether the message was sent successfully'),
+  error: z.string().optional().describe('Error message if failed'),
+});
+
+const TASK_CANCEL_INPUT_SCHEMA = z.object({
+  taskId: z.string().describe('Task to cancel'),
+  reason: z.string().describe('Cancellation reason'),
+});
+
+const TASK_CANCEL_OUTPUT_SCHEMA = z.object({
+  success: z.boolean(),
+});
+
+const TASK_ACTIVE_INPUT_SCHEMA = z.object({
+  limit: z.number().optional().describe('Maximum number of tasks to return'),
+});
+
+const TASK_ACTIVE_OUTPUT_SCHEMA = z.object({
+  tasks: z.array(z.object({
+    id: z.string(),
+    goal: z.string(),
+    parentTaskId: z.string().optional(),
+    lastActivityTime: z.number(),
+    messageCount: z.number(),
+    createdAt: z.number(),
+  })),
+});
+
+// Meta definitions
+const TASK_SPAWN_META: AbilityMeta = {
+  id: 'task:spawn',
+  moduleName: 'task',
+  abilityName: 'spawn',
+  description: 'Create a new task',
+  inputSchema: TASK_SPAWN_INPUT_SCHEMA,
+  outputSchema: TASK_SPAWN_OUTPUT_SCHEMA,
+};
+
+const TASK_SEND_META: AbilityMeta = {
+  id: 'task:send',
+  moduleName: 'task',
+  abilityName: 'send',
+  description: 'Send a message to a task (inter-task communication)',
+  inputSchema: TASK_SEND_INPUT_SCHEMA,
+  outputSchema: TASK_SEND_OUTPUT_SCHEMA,
+};
+
+const TASK_CANCEL_META: AbilityMeta = {
+  id: 'task:cancel',
+  moduleName: 'task',
+  abilityName: 'cancel',
+  description: 'Cancel a running task',
+  inputSchema: TASK_CANCEL_INPUT_SCHEMA,
+  outputSchema: TASK_CANCEL_OUTPUT_SCHEMA,
+};
+
+const TASK_ACTIVE_META: AbilityMeta = {
+  id: 'task:active',
+  moduleName: 'task',
+  abilityName: 'active',
+  description: 'List all active (in-progress) tasks',
+  inputSchema: TASK_ACTIVE_INPUT_SCHEMA,
+  outputSchema: TASK_ACTIVE_OUTPUT_SCHEMA,
+};
+
 const generateId = (): string => {
   return `task-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 };
@@ -76,34 +158,15 @@ const saveTaskAndMessages = async (
   }
 };
 
-const spawnInputSchema = z.object({
-  goal: z.string().describe('Task goal or initial message'),
-  parentTaskId: z.string().optional().describe('Optional parent task ID for subtasks'),
-  systemPrompt: z.string().optional().describe('Optional custom system prompt'),
-});
-
-const spawnOutputSchema = z.object({
-  taskId: z.string().describe('Created task ID'),
-});
-
-const spawnMeta: AbilityMeta = {
-  id: 'task:spawn',
-  moduleName: 'task',
-  abilityName: 'spawn',
-  description: 'Create a new task',
-  inputSchema: spawnInputSchema,
-  outputSchema: spawnOutputSchema,
-};
-
 const registerSpawnAbility = (
   registry: TaskRegistry,
   bus: AgentBus,
   executeTask: (taskId: string) => Promise<void>
 ): void => {
 
-  bus.register(spawnMeta, async (_taskId: string, input: string): Promise<AbilityResult<string, string>> => {
+  bus.register(TASK_SPAWN_META, async (_taskId: string, input: string): Promise<AbilityResult<string, string>> => {
     try {
-      const { goal, parentTaskId, systemPrompt } = JSON.parse(input);
+      const { goal, parentTaskId, systemPrompt } = TASK_SPAWN_INPUT_SCHEMA.parse(JSON.parse(input));
 
       const taskId = generateId();
       const task = createTask(taskId, goal, parentTaskId, systemPrompt);
@@ -134,25 +197,6 @@ const registerSpawnAbility = (
       };
     }
   });
-};
-
-const sendInputSchema = z.object({
-  receiverId: z.string().describe('Task ID to receive the message'),
-  message: z.string().describe('Message content to send'),
-});
-
-const sendOutputSchema = z.object({
-  success: z.boolean().describe('Whether the message was sent successfully'),
-  error: z.string().optional().describe('Error message if failed'),
-});
-
-const sendMeta: AbilityMeta = {
-  id: 'task:send',
-  moduleName: 'task',
-  abilityName: 'send',
-  description: 'Send a message to a task (inter-task communication)',
-  inputSchema: sendInputSchema,
-  outputSchema: sendOutputSchema,
 };
 
 const handleTaskSend = async (
@@ -198,9 +242,9 @@ const registerSendAbility = (
   bus: AgentBus,
   executeTask: (taskId: string) => Promise<void>
 ): void => {
-  bus.register(sendMeta, async (_taskId: string, input: string): Promise<AbilityResult<string, string>> => {
+  bus.register(TASK_SEND_META, async (_taskId: string, input: string): Promise<AbilityResult<string, string>> => {
     try {
-      const { receiverId, message } = JSON.parse(input);
+      const { receiverId, message } = TASK_SEND_INPUT_SCHEMA.parse(JSON.parse(input));
       const result = await handleTaskSend(receiverId, message, registry, bus, executeTask);
       return { type: 'success', result: JSON.stringify(result) };
     } catch (error) {
@@ -212,29 +256,11 @@ const registerSendAbility = (
   });
 };
 
-const cancelInputSchema = z.object({
-  taskId: z.string().describe('Task to cancel'),
-  reason: z.string().describe('Cancellation reason'),
-});
-
-const cancelOutputSchema = z.object({
-  success: z.boolean(),
-});
-
-const cancelMeta: AbilityMeta = {
-  id: 'task:cancel',
-  moduleName: 'task',
-  abilityName: 'cancel',
-  description: 'Cancel a running task',
-  inputSchema: cancelInputSchema,
-  outputSchema: cancelOutputSchema,
-};
-
 const registerCancelAbility = (registry: TaskRegistry, bus: AgentBus): void => {
 
-  bus.register(cancelMeta, async (_taskId: string, input: string): Promise<AbilityResult<string, string>> => {
+  bus.register(TASK_CANCEL_META, async (_taskId: string, input: string): Promise<AbilityResult<string, string>> => {
     try {
-      const { taskId, reason } = JSON.parse(input);
+      const { taskId, reason } = TASK_CANCEL_INPUT_SCHEMA.parse(JSON.parse(input));
 
       const taskState = registry.get(taskId);
       if (!taskState) {
@@ -264,35 +290,11 @@ const registerCancelAbility = (registry: TaskRegistry, bus: AgentBus): void => {
   });
 };
 
-const activeInputSchema = z.object({
-  limit: z.number().optional().describe('Maximum number of tasks to return'),
-});
-
-const activeOutputSchema = z.object({
-  tasks: z.array(z.object({
-    id: z.string(),
-    goal: z.string(),
-    parentTaskId: z.string().optional(),
-    lastActivityTime: z.number(),
-    messageCount: z.number(),
-    createdAt: z.number(),
-  })),
-});
-
-const activeMeta: AbilityMeta = {
-  id: 'task:active',
-  moduleName: 'task',
-  abilityName: 'active',
-  description: 'List all active (in-progress) tasks',
-  inputSchema: activeInputSchema,
-  outputSchema: activeOutputSchema,
-};
-
 const registerActiveAbility = (registry: TaskRegistry, bus: AgentBus): void => {
 
-  bus.register(activeMeta, async (_taskId: string, input: string): Promise<AbilityResult<string, string>> => {
+  bus.register(TASK_ACTIVE_META, async (_taskId: string, input: string): Promise<AbilityResult<string, string>> => {
     try {
-      const { limit } = JSON.parse(input) as { limit?: number };
+      const { limit } = TASK_ACTIVE_INPUT_SCHEMA.parse(JSON.parse(input));
 
       const activeTasks = Array.from(registry.values())
         .filter((state) => state.task.completionStatus === undefined)

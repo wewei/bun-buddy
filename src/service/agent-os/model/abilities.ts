@@ -9,15 +9,11 @@ import type {
   ChatMessage,
   CompletionOptions,
   ToolCall,
-  ToolDefinition,
   ProviderAdapter,
 } from './types';
 
-// ============================================================================
-// model:llm - LLM completion ability
-// ============================================================================
-
-const llmInputSchema = z.object({
+// Schema definitions
+const MODEL_LLM_INPUT_SCHEMA = z.object({
   messages: z.array(z.object({
     role: z.enum(['system', 'user', 'assistant', 'tool']),
     content: z.string(),
@@ -31,7 +27,7 @@ const llmInputSchema = z.object({
   tools: z.array(z.any()).optional().describe('Optional tool definitions'),
 });
 
-const llmOutputSchema = z.object({
+const MODEL_LLM_OUTPUT_SCHEMA = z.object({
   content: z.string(),
   toolCalls: z.array(z.any()).optional(),
   usage: z.object({
@@ -41,24 +37,51 @@ const llmOutputSchema = z.object({
   }).optional(),
 });
 
-const createLLMMeta = (): AbilityMeta => ({
+const MODEL_LIST_LLM_INPUT_SCHEMA = z.object({});
+
+const MODEL_LIST_LLM_OUTPUT_SCHEMA = z.object({
+  providers: z.array(z.object({
+    providerName: z.string(),
+    models: z.array(z.string()),
+  })),
+  total: z.number(),
+});
+
+const MODEL_LIST_EMBED_INPUT_SCHEMA = z.object({});
+
+const MODEL_LIST_EMBED_OUTPUT_SCHEMA = z.object({
+  providers: z.array(z.object({
+    providerName: z.string(),
+    models: z.array(z.string()),
+  })),
+  total: z.number(),
+});
+
+const MODEL_LLM_META: AbilityMeta = {
   id: 'model:llm',
   moduleName: 'model',
   abilityName: 'llm',
   description: 'Invoke LLM for chat completion',
-  inputSchema: llmInputSchema,
-  outputSchema: llmOutputSchema,
-});
+  inputSchema: MODEL_LLM_INPUT_SCHEMA,
+  outputSchema: MODEL_LLM_OUTPUT_SCHEMA,
+};
 
-type LLMInput = {
-  messages: ChatMessage[];
-  provider: string;
-  model: string;
-  temperature?: number;
-  maxTokens?: number;
-  topP?: number;
-  streamToUser?: boolean;
-  tools?: ToolDefinition[];
+const MODEL_LIST_LLM_META: AbilityMeta = {
+  id: 'model:listLLM',
+  moduleName: 'model',
+  abilityName: 'listLLM',
+  description: 'List all LLM providers and available models',
+  inputSchema: MODEL_LIST_LLM_INPUT_SCHEMA,
+  outputSchema: MODEL_LIST_LLM_OUTPUT_SCHEMA,
+};
+
+const MODEL_LIST_EMBED_META: AbilityMeta = {
+  id: 'model:listEmbed',
+  moduleName: 'model',
+  abilityName: 'listEmbed',
+  description: 'List all embedding providers and available models',
+  inputSchema: MODEL_LIST_EMBED_INPUT_SCHEMA,
+  outputSchema: MODEL_LIST_EMBED_OUTPUT_SCHEMA,
 };
 
 const generateMessageId = (): string => {
@@ -140,6 +163,7 @@ const handleLLMInvoke = async (
   bus: AgentBus
 ): Promise<AbilityResult<string, string>> => {
   try {
+    const parsed = MODEL_LLM_INPUT_SCHEMA.parse(JSON.parse(input));
     const {
       messages,
       provider,
@@ -149,7 +173,7 @@ const handleLLMInvoke = async (
       topP,
       streamToUser,
       tools,
-    } = JSON.parse(input) as LLMInput;
+    } = parsed;
 
     const validation = validateProviderAndModel(provider, model, registry, adapters);
     if (!validation.success) {
@@ -187,33 +211,10 @@ const registerLLMAbility = (
   adapters: Map<string, ProviderAdapter>,
   bus: AgentBus
 ): void => {
-  bus.register(createLLMMeta(), async (taskId: string, input: string) =>
+  bus.register(MODEL_LLM_META, async (taskId: string, input: string) =>
     handleLLMInvoke(taskId, input, registry, adapters, bus)
   );
 };
-
-// ============================================================================
-// model:listLLM - List LLM providers and models
-// ============================================================================
-
-const listLLMInputSchema = z.object({});
-
-const listLLMOutputSchema = z.object({
-  providers: z.array(z.object({
-    providerName: z.string(),
-    models: z.array(z.string()),
-  })),
-  total: z.number(),
-});
-
-const createListLLMMeta = (): AbilityMeta => ({
-  id: 'model:listLLM',
-  moduleName: 'model',
-  abilityName: 'listLLM',
-  description: 'List all LLM providers and available models',
-  inputSchema: listLLMInputSchema,
-  outputSchema: listLLMOutputSchema,
-});
 
 const handleListLLMInvoke = async (
   _taskId: string,
@@ -243,33 +244,10 @@ const handleListLLMInvoke = async (
 };
 
 const registerListLLMAbility = (registry: ProviderRegistry, bus: AgentBus): void => {
-  bus.register(createListLLMMeta(), async (taskId: string, input: string) =>
+  bus.register(MODEL_LIST_LLM_META, async (taskId: string, input: string) =>
     handleListLLMInvoke(taskId, input, registry)
   );
 };
-
-// ============================================================================
-// model:listEmbed - List embedding providers and models
-// ============================================================================
-
-const listEmbedInputSchema = z.object({});
-
-const listEmbedOutputSchema = z.object({
-  providers: z.array(z.object({
-    providerName: z.string(),
-    models: z.array(z.string()),
-  })),
-  total: z.number(),
-});
-
-const createListEmbedMeta = (): AbilityMeta => ({
-  id: 'model:listEmbed',
-  moduleName: 'model',
-  abilityName: 'listEmbed',
-  description: 'List all embedding providers and available models',
-  inputSchema: listEmbedInputSchema,
-  outputSchema: listEmbedOutputSchema,
-});
 
 const handleListEmbedInvoke = async (
   _taskId: string,
@@ -299,7 +277,7 @@ const handleListEmbedInvoke = async (
 };
 
 const registerListEmbedAbility = (registry: ProviderRegistry, bus: AgentBus): void => {
-  bus.register(createListEmbedMeta(), async (taskId: string, input: string) =>
+  bus.register(MODEL_LIST_EMBED_META, async (taskId: string, input: string) =>
     handleListEmbedInvoke(taskId, input, registry)
   );
 };
