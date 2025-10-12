@@ -1,19 +1,60 @@
 // Shell HTTP Routes
 
-import type { AgentBus } from '../types';
-import type { SendRequest } from './types';
 import { createSSEStream } from './sse';
 
-const validateSendRequest = (body: any): SendRequest => {
-  if (typeof body.message !== 'string' || body.message.trim() === '') {
+import type { AgentBus } from '../types';
+import type { SendRequest } from './types';
+
+const validateSendRequest = (body: unknown): SendRequest => {
+  if (typeof body !== 'object' || body === null) {
+    throw new Error('Invalid request body: must be an object');
+  }
+
+  const obj = body as Record<string, unknown>;
+
+  if (typeof obj.message !== 'string' || obj.message.trim() === '') {
     throw new Error('Invalid message: must be non-empty string');
   }
 
-  if (body.taskId !== undefined && typeof body.taskId !== 'string') {
+  if (obj.taskId !== undefined && typeof obj.taskId !== 'string') {
     throw new Error('Invalid taskId: must be string');
   }
 
-  return body as SendRequest;
+  return obj as SendRequest;
+};
+
+const sendToExistingTask = async (
+  bus: AgentBus,
+  taskId: string,
+  message: string
+): Promise<{ success: boolean; taskId: string; error?: string }> => {
+  const result = await bus.invoke(
+    'shell',
+    'task:send',
+    JSON.stringify({
+      receiverId: taskId,
+      message,
+    })
+  );
+  const parsed = JSON.parse(result);
+
+  if (!parsed.success) {
+    return { success: false, taskId, error: parsed.error };
+  }
+
+  return { success: true, taskId };
+};
+
+const createNewTask = async (bus: AgentBus, message: string): Promise<string> => {
+  const result = await bus.invoke(
+    'shell',
+    'task:spawn',
+    JSON.stringify({
+      goal: message,
+    })
+  );
+  const parsed = JSON.parse(result);
+  return parsed.taskId;
 };
 
 export const createRoutes = (bus: AgentBus) => {
@@ -23,31 +64,19 @@ export const createRoutes = (bus: AgentBus) => {
       const body = await req.json();
       const { message, taskId } = validateSendRequest(body);
 
-      // For MVP: if no taskId, create a new task
-      // If taskId is provided, send message to that task
       let targetTaskId: string;
 
       if (taskId) {
-        // Send to existing task
-        const result = await bus.invoke('shell', 'task:send', JSON.stringify({
-          receiverId: taskId,
-          message,
-        }));
-        const parsed = JSON.parse(result);
-        if (!parsed.success) {
+        const result = await sendToExistingTask(bus, taskId, message);
+        if (!result.success) {
           return Response.json(
-            { error: { code: 'SEND_FAILED', message: parsed.error } },
+            { error: { code: 'SEND_FAILED', message: result.error } },
             { status: 400 }
           );
         }
-        targetTaskId = taskId;
+        targetTaskId = result.taskId;
       } else {
-        // Create new task
-        const result = await bus.invoke('shell', 'task:spawn', JSON.stringify({
-          goal: message,
-        }));
-        const parsed = JSON.parse(result);
-        targetTaskId = parsed.taskId;
+        targetTaskId = await createNewTask(bus, message);
       }
 
       return Response.json({
@@ -84,4 +113,3 @@ export const createRoutes = (bus: AgentBus) => {
     handleStream,
   };
 };
-

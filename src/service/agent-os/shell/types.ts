@@ -23,8 +23,8 @@ export type SSEEvent = {
   messageId?: string;
   index?: number;
   tool?: string;
-  args?: any;
-  result?: any;
+  args?: unknown;
+  result?: unknown;
   status?: string;
   error?: string;
 };

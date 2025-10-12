@@ -34,7 +34,7 @@ export const createSSEStream = (taskId: string): ReadableStream => {
       heartbeatInterval = setInterval(() => {
         try {
           controller.enqueue(new TextEncoder().encode(': heartbeat\n\n'));
-        } catch (error) {
+        } catch {
           // Connection closed, cleanup
           clearInterval(heartbeatInterval);
         }
@@ -61,7 +61,7 @@ export const sendSSEEvent = (taskId: string, event: SSEEvent): boolean => {
     const formatted = formatSSE(event);
     connection.controller.enqueue(formatted);
     return true;
-  } catch (error) {
+  } catch {
     // Connection closed or error
     activeConnections.delete(taskId);
     return false;
@@ -77,7 +77,7 @@ export const closeConnection = (taskId: string): void => {
   if (connection) {
     try {
       connection.controller.close();
-    } catch (error) {
+    } catch {
       // Already closed
     }
     activeConnections.delete(taskId);

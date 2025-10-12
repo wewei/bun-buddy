@@ -1,11 +1,11 @@
 // Bus Controller Abilities - Self-hosted introspection
 
-import type { AgentBus, AbilityMeta } from '../types';
-import type { BusState } from './types';
 import { listModules, listAbilitiesForModule, getAbility } from './registry';
 
-export const registerBusControllerAbilities = (state: BusState, bus: AgentBus): void => {
-  // bus:list - List all modules
+import type { AgentBus, AbilityMeta } from '../types';
+import type { BusState } from './types';
+
+const registerListAbility = (state: BusState, bus: AgentBus): void => {
   const listMeta: AbilityMeta = {
     id: 'bus:list',
     moduleName: 'bus',
@@ -33,12 +33,13 @@ export const registerBusControllerAbilities = (state: BusState, bus: AgentBus): 
     },
   };
 
-  bus.register(listMeta, async (_input: string) => {
+  bus.register(listMeta, async () => {
     const modules = listModules(state);
     return JSON.stringify({ modules });
   });
+};
 
-  // bus:abilities - List abilities for a module
+const registerAbilitiesAbility = (state: BusState, bus: AgentBus): void => {
   const abilitiesMeta: AbilityMeta = {
     id: 'bus:abilities',
     moduleName: 'bus',
@@ -79,8 +80,9 @@ export const registerBusControllerAbilities = (state: BusState, bus: AgentBus): 
     const abilities = listAbilitiesForModule(state, moduleName);
     return JSON.stringify({ moduleName, abilities });
   });
+};
 
-  // bus:schema - Get input/output schema for an ability
+const registerSchemaAbility = (state: BusState, bus: AgentBus): void => {
   const schemaMeta: AbilityMeta = {
     id: 'bus:schema',
     moduleName: 'bus',
@@ -121,8 +123,9 @@ export const registerBusControllerAbilities = (state: BusState, bus: AgentBus): 
       outputSchema: ability.meta.outputSchema,
     });
   });
+};
 
-  // bus:inspect - Get full metadata for an ability
+const registerInspectAbility = (state: BusState, bus: AgentBus): void => {
   const inspectMeta: AbilityMeta = {
     id: 'bus:inspect',
     moduleName: 'bus',
@@ -159,3 +162,9 @@ export const registerBusControllerAbilities = (state: BusState, bus: AgentBus): 
   });
 };
 
+export const registerBusControllerAbilities = (state: BusState, bus: AgentBus): void => {
+  registerListAbility(state, bus);
+  registerAbilitiesAbility(state, bus);
+  registerSchemaAbility(state, bus);
+  registerInspectAbility(state, bus);
+};

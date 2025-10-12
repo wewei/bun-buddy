@@ -1,16 +1,21 @@
 // Shell Module - HTTP API and SSE
 
-import type { AgentBus } from '../types';
-import { createRoutes } from './routes';
 import { registerShellAbilities } from './abilities';
+import { createRoutes } from './routes';
+
+import type { AgentBus } from '../types';
 
 export type Shell = {
   start: (port: number) => Promise<void>;
   stop: () => Promise<void>;
 };
 
+type BunServer = {
+  stop: () => void;
+};
+
 export const createShell = (bus: AgentBus): Shell => {
-  let server: any;
+  let server: BunServer | undefined;
 
   // Register shell abilities
   registerShellAbilities(bus);
@@ -68,6 +73,4 @@ export const createShell = (bus: AgentBus): Shell => {
     stop,
   };
 };
-
-export type { Shell };
 

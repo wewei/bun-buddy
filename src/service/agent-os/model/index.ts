@@ -1,9 +1,10 @@
 // Model Manager
 
+import { registerModelAbilities } from './abilities';
+import { createOpenAIAdapter } from './providers/openai';
+
 import type { AgentBus } from '../types';
 import type { ModelRegistry, ProviderAdapter, ModelInstance } from './types';
-import { createOpenAIAdapter } from './providers/openai';
-import { registerModelAbilities } from './abilities';
 
 export type ModelManagerConfig = {
   models: ModelInstance[];

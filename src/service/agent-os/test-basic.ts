@@ -29,14 +29,16 @@ const testBasicFunctionality = async () => {
   // Test Bus abilities
   console.log('2. Testing Bus abilities...');
   const modules = await agentOS.bus.invoke('test', 'bus:list', '{}');
-  const modulesData = JSON.parse(modules);
-  console.log('✓ Modules:', modulesData.modules.map((m: any) => m.name).join(', '));
+  const modulesData = JSON.parse(modules) as { modules: Array<{ name: string }> };
+  console.log('✓ Modules:', modulesData.modules.map((m) => m.name).join(', '));
 
   // Test Model Manager
   console.log('\n3. Testing Model Manager...');
   const models = await agentOS.bus.invoke('test', 'model:list', '{}');
-  const modelsData = JSON.parse(models);
-  console.log('✓ Models:', modelsData.models.map((m: any) => `${m.id} (${m.provider})`).join(', '));
+  const modelsData = JSON.parse(models) as {
+    models: Array<{ id: string; provider: string }>;
+  };
+  console.log('✓ Models:', modelsData.models.map((m) => `${m.id} (${m.provider})`).join(', '));
 
   // Test Task Manager
   console.log('\n4. Testing Task Manager...');

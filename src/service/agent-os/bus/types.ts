@@ -11,6 +11,6 @@ export type BusError = {
   code: 'NOT_FOUND' | 'INVALID_INPUT' | 'EXECUTION_ERROR' | 'ALREADY_REGISTERED';
   message: string;
   abilityId?: string;
-  details?: any;
+  details?: unknown;
 };
 

@@ -3,7 +3,6 @@
 import { createAgentBus, type AgentBus } from './bus';
 import { createMockLedger, registerLedgerAbilities, type Ledger } from './ledger';
 import {
-  createModelManager,
   initializeModelManager,
   type ModelManager,
   type ModelManagerConfig,

@@ -3,8 +3,7 @@
 import type { AgentBus, AbilityMeta, Task, Call, Message } from '../types';
 import type { Ledger } from './types';
 
-export const registerLedgerAbilities = (ledger: Ledger, bus: AgentBus): void => {
-  // ldg:task:save
+const registerTaskSaveAbility = (ledger: Ledger, bus: AgentBus): void => {
   const taskSaveMeta: AbilityMeta = {
     id: 'ldg:task:save',
     moduleName: 'ldg',
@@ -34,8 +33,9 @@ export const registerLedgerAbilities = (ledger: Ledger, bus: AgentBus): void => 
     await ledger.saveTask(task);
     return JSON.stringify({ success: true });
   });
+};
 
-  // ldg:task:get
+const registerTaskGetAbility = (ledger: Ledger, bus: AgentBus): void => {
   const taskGetMeta: AbilityMeta = {
     id: 'ldg:task:get',
     moduleName: 'ldg',
@@ -65,8 +65,9 @@ export const registerLedgerAbilities = (ledger: Ledger, bus: AgentBus): void => 
     const task = await ledger.getTask(taskId);
     return JSON.stringify({ task });
   });
+};
 
-  // ldg:task:query
+const registerTaskQueryAbility = (ledger: Ledger, bus: AgentBus): void => {
   const taskQueryMeta: AbilityMeta = {
     id: 'ldg:task:query',
     moduleName: 'ldg',
@@ -101,8 +102,9 @@ export const registerLedgerAbilities = (ledger: Ledger, bus: AgentBus): void => 
     const result = await ledger.queryTasks(options);
     return JSON.stringify(result);
   });
+};
 
-  // ldg:call:save
+const registerCallSaveAbility = (ledger: Ledger, bus: AgentBus): void => {
   const callSaveMeta: AbilityMeta = {
     id: 'ldg:call:save',
     moduleName: 'ldg',
@@ -132,8 +134,9 @@ export const registerLedgerAbilities = (ledger: Ledger, bus: AgentBus): void => 
     await ledger.saveCall(call);
     return JSON.stringify({ success: true });
   });
+};
 
-  // ldg:call:list
+const registerCallListAbility = (ledger: Ledger, bus: AgentBus): void => {
   const callListMeta: AbilityMeta = {
     id: 'ldg:call:list',
     moduleName: 'ldg',
@@ -163,8 +166,9 @@ export const registerLedgerAbilities = (ledger: Ledger, bus: AgentBus): void => 
     const calls = await ledger.listCalls({ taskId });
     return JSON.stringify({ calls });
   });
+};
 
-  // ldg:msg:save
+const registerMsgSaveAbility = (ledger: Ledger, bus: AgentBus): void => {
   const msgSaveMeta: AbilityMeta = {
     id: 'ldg:msg:save',
     moduleName: 'ldg',
@@ -195,8 +199,9 @@ export const registerLedgerAbilities = (ledger: Ledger, bus: AgentBus): void => 
     const messageId = await ledger.saveMessage(message);
     return JSON.stringify({ success: true, messageId });
   });
+};
 
-  // ldg:msg:list
+const registerMsgListAbility = (ledger: Ledger, bus: AgentBus): void => {
   const msgListMeta: AbilityMeta = {
     id: 'ldg:msg:list',
     moduleName: 'ldg',
@@ -231,3 +236,12 @@ export const registerLedgerAbilities = (ledger: Ledger, bus: AgentBus): void => 
   });
 };
 
+export const registerLedgerAbilities = (ledger: Ledger, bus: AgentBus): void => {
+  registerTaskSaveAbility(ledger, bus);
+  registerTaskGetAbility(ledger, bus);
+  registerTaskQueryAbility(ledger, bus);
+  registerCallSaveAbility(ledger, bus);
+  registerCallListAbility(ledger, bus);
+  registerMsgSaveAbility(ledger, bus);
+  registerMsgListAbility(ledger, bus);
+};
