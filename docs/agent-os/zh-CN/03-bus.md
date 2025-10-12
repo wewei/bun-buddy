@@ -12,17 +12,18 @@
 
 - **唯一 ID**：格式 `${moduleName}:${abilityName}`（例如 `task:spawn`）
 - **输入**：字符串（通常是 JSON 编码）
-- **输出**：字符串（单个响应）或流（多个块）
-- **元数据**：描述、模式、执行类型
+- **输出**：字符串（单个响应）
+- **元数据**：描述、模式、标签
+- **调用者追踪**：所有调用都携带调用方任务 ID
 
 ### 总线架构
 
 ```
 ┌─────────────────────────────────────────────────┐
-│              调用者（任何模块）                   │
+│      调用者（任何模块，如 Task Manager）          │
 └───────────────────┬─────────────────────────────┘
                     │
-                    │ invoke('task:spawn')(input)
+                    │ invoke('task-123', 'mem:retrieve', input)
                     ▼
 ┌─────────────────────────────────────────────────┐
 │              Agent Bus Controller               │
@@ -32,7 +33,8 @@
 │  │  {                                       │  │
 │  │    'task:spawn': { meta, handler },     │  │
 │  │    'model:llm': { meta, handler },      │  │
-│  │    'mem:retrieve': { meta, handler }    │  │
+│  │    'mem:retrieve': { meta, handler },   │  │
+│  │    'shell:sendMessageChunk': { ... }    │  │
 │  │  }                                       │  │
 │  └──────────────────────────────────────────┘  │
 │                                                 │
@@ -40,6 +42,7 @@
 │  │         路由逻辑                          │  │
 │  │  - 通过 abilityId 查找处理器              │  │
 │  │  - 根据模式验证输入                       │  │
+│  │  - 记录 callerId 用于追踪                │  │
 │  │  - 执行处理器                            │  │
 │  │  - 返回结果                              │  │
 │  └──────────────────────────────────────────┘  │
@@ -48,7 +51,7 @@
                     │ handler(input)
                     ▼
 ┌─────────────────────────────────────────────────┐
-│          目标模块（例如 Task Mgr）               │
+│    目标模块（如 Memory Manager）                 │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -59,7 +62,6 @@
 ```typescript
 // 能力处理器签名
 type AbilityHandler = (input: string) => Promise<string>;
-type AbilityStreamHandler = (input: string) => AsyncGenerator<string>;
 
 // 能力元数据
 type AbilityMeta = {
@@ -69,26 +71,25 @@ type AbilityMeta = {
   description: string;
   inputSchema: JSONSchema;              // 用于输入验证的 JSON Schema
   outputSchema: JSONSchema;             // 输出的 JSON Schema
-  isStream: boolean;                    // 流式为 true，单次响应为 false
   tags?: string[];                      // 可选的分类标签
 };
 
 // 已注册的能力
 type RegisteredAbility = {
   meta: AbilityMeta;
-  handler: AbilityHandler | AbilityStreamHandler;
+  handler: AbilityHandler;
 };
 
 // Agent Bus 公共接口
 type AgentBus = {
-  // 调用能力（单次响应）
-  invoke: (abilityId: string) => (input: string) => Promise<string>;
-  
-  // 调用能力（流式响应）
-  invokeStream: (abilityId: string) => (input: string) => AsyncGenerator<string>;
+  // 调用能力
+  // callerId: 调用方任务 ID，用于追踪和审计
+  // abilityId: 能力标识符（如 'task:spawn'）
+  // input: JSON 编码的参数
+  invoke: (callerId: string, abilityId: string, input: string) => Promise<string>;
   
   // 注册新能力
-  register: (meta: AbilityMeta, handler: AbilityHandler | AbilityStreamHandler) => void;
+  register: (meta: AbilityMeta, handler: AbilityHandler) => void;
   
   // 注销能力
   unregister: (abilityId: string) => void;
@@ -100,45 +101,69 @@ type AgentBus = {
 
 ### 调用 API
 
-#### invoke() - 单次响应
+#### invoke() - 调用能力
 
-对于返回单个结果的能力：
+所有能力调用都使用统一的三参数接口：
 
 ```typescript
-// 使用示例
-const result = await bus.invoke('task:spawn')(JSON.stringify({
-  goal: 'Analyze sales data'
-}));
+// 基本使用示例
+const result = await bus.invoke(
+  'task-abc123',              // callerId - 调用方任务 ID
+  'task:spawn',               // abilityId - 能力标识符
+  JSON.stringify({            // input - JSON 编码的参数
+    goal: 'Analyze sales data'
+  })
+);
 
 const { taskId } = JSON.parse(result);
 console.log(`Created task: ${taskId}`);
 ```
 
-**柯里化签名**：`invoke` 返回一个函数以支持部分应用：
+**参数说明**：
+
+1. **callerId**：调用方的任务 ID
+   - 用于追踪能力调用链
+   - 用于审计和调试
+   - 用于权限控制（未来）
+
+2. **abilityId**：目标能力的唯一标识符
+   - 格式：`${moduleName}:${abilityName}`
+   - 例如：`task:spawn`、`mem:retrieve`、`shell:sendMessageChunk`
+
+3. **input**：JSON 编码的参数字符串
+   - 必须符合能力的 inputSchema
+   - 由总线自动验证
+
+**调用示例**：
 
 ```typescript
-// 获取特定能力的调用器
-const spawnTask = bus.invoke('task:spawn');
+// 从任务中检索记忆
+const memResult = await bus.invoke(
+  'task-xyz789',
+  'mem:retrieve',
+  JSON.stringify({ query: 'sales data Q1' })
+);
 
-// 多次使用
-const result1 = await spawnTask('{"goal":"Task 1"}');
-const result2 = await spawnTask('{"goal":"Task 2"}');
-```
+// 向用户发送消息片段
+await bus.invoke(
+  'task-abc123',
+  'shell:sendMessageChunk',
+  JSON.stringify({
+    content: 'Processing your request...',
+    messageId: 'msg-001',
+    index: 0
+  })
+);
 
-#### invokeStream() - 流式响应
-
-对于返回多个块的能力：
-
-```typescript
-// 使用示例
-const stream = bus.invokeStream('model:llm')(JSON.stringify({
-  messages: [{ role: 'user', content: 'Hello' }]
-}));
-
-for await (const chunk of stream) {
-  const data = JSON.parse(chunk);
-  process.stdout.write(data.content);
-}
+// 任务间通信
+const sendResult = await bus.invoke(
+  'task-parent',
+  'task:send',
+  JSON.stringify({
+    receiverId: 'task-child',
+    message: 'Continue with next step'
+  })
+);
 ```
 
 ### 注册 API
@@ -155,7 +180,6 @@ bus.register(
     moduleName: 'task',
     abilityName: 'spawn',
     description: 'Create a new task',
-    isStream: false,
     inputSchema: {
       type: 'object',
       properties: {
@@ -180,6 +204,8 @@ bus.register(
   }
 );
 ```
+
+**注意**：处理器函数只接收 `input` 参数。`callerId` 由总线管理，用于审计和追踪，但不传递给处理器。如果能力需要知道调用者，应在 `input` 中显式包含。
 
 #### unregister()
 
@@ -264,13 +290,14 @@ Bus Controller 本身注册用于内省和发现的能力。
 
 **示例**：
 ```typescript
-const result = await bus.invoke('bus:list')('{}');
+const result = await bus.invoke('system', 'bus:list', '{}');
 console.log(JSON.parse(result));
 // {
 //   "modules": [
-//     { "name": "task", "abilityCount": 5 },
-//     { "name": "model", "abilityCount": 4 },
-//     { "name": "mem", "abilityCount": 5 },
+//     { "name": "task", "abilityCount": 4 },
+//     { "name": "model", "abilityCount": 3 },
+//     { "name": "mem", "abilityCount": 4 },
+//     { "name": "shell", "abilityCount": 1 },
 //     { "name": "bus", "abilityCount": 4 }
 //   ]
 // }
@@ -304,8 +331,7 @@ console.log(JSON.parse(result));
         "properties": {
           "id": { "type": "string" },
           "name": { "type": "string" },
-          "description": { "type": "string" },
-          "isStream": { "type": "boolean" }
+          "description": { "type": "string" }
         }
       }
     }
@@ -315,16 +341,20 @@ console.log(JSON.parse(result));
 
 **示例**：
 ```typescript
-const result = await bus.invoke('bus:abilities')(JSON.stringify({
-  moduleName: 'task'
-}));
+const result = await bus.invoke(
+  'system',                   // 系统级调用
+  'bus:abilities',
+  JSON.stringify({
+    moduleName: 'task'
+  })
+);
 console.log(JSON.parse(result));
 // {
 //   "moduleName": "task",
 //   "abilities": [
-//     { "id": "task:spawn", "name": "spawn", "description": "...", "isStream": false },
-//     { "id": "task:send", "name": "send", "description": "...", "isStream": false },
-//     { "id": "task:stream", "name": "stream", "description": "...", "isStream": true }
+//     { "id": "task:spawn", "name": "spawn", "description": "创建新任务" },
+//     { "id": "task:send", "name": "send", "description": "向任务发送消息" },
+//     { "id": "task:cancel", "name": "cancel", "description": "取消任务" }
 //   ]
 // }
 ```
@@ -358,9 +388,13 @@ console.log(JSON.parse(result));
 
 **示例**：
 ```typescript
-const result = await bus.invoke('bus:schema')(JSON.stringify({
-  abilityId: 'task:spawn'
-}));
+const result = await bus.invoke(
+  'system',
+  'bus:schema',
+  JSON.stringify({
+    abilityId: 'task:spawn'
+  })
+);
 console.log(JSON.parse(result));
 // {
 //   "abilityId": "task:spawn",
@@ -408,19 +442,22 @@ console.log(JSON.parse(result));
 
 **示例**：
 ```typescript
-const result = await bus.invoke('bus:inspect')(JSON.stringify({
-  abilityId: 'task:spawn'
-}));
+const result = await bus.invoke(
+  'system',
+  'bus:inspect',
+  JSON.stringify({
+    abilityId: 'task:spawn'
+  })
+);
 console.log(JSON.parse(result));
 // {
 //   "meta": {
 //     "id": "task:spawn",
 //     "moduleName": "task",
 //     "abilityName": "spawn",
-//     "description": "Create a new task with the given goal",
+//     "description": "创建具有给定目标的新任务",
 //     "inputSchema": { ... },
 //     "outputSchema": { ... },
-//     "isStream": false,
 //     "tags": ["task", "creation"]
 //   }
 // }
@@ -433,50 +470,40 @@ console.log(JSON.parse(result));
 ```typescript
 type BusState = {
   abilities: Map<string, RegisteredAbility>;
+  callLog: Array<{ callerId: string; abilityId: string; timestamp: number }>;
 };
 
 const createAgentBus = (): AgentBus => {
   const state: BusState = {
-    abilities: new Map()
+    abilities: new Map(),
+    callLog: []
   };
   
   // 注册 bus controller 自己的能力
   registerBusControllerAbilities(state);
   
   return {
-    invoke: (abilityId: string) => async (input: string) => {
+    invoke: async (callerId: string, abilityId: string, input: string) => {
       const ability = state.abilities.get(abilityId);
       if (!ability) {
         throw new Error(`Ability not found: ${abilityId}`);
       }
-      if (ability.meta.isStream) {
-        throw new Error(`Ability ${abilityId} is streaming, use invokeStream()`);
-      }
+      
+      // 记录调用用于审计
+      state.callLog.push({
+        callerId,
+        abilityId,
+        timestamp: Date.now()
+      });
       
       // 验证输入
       validateInput(input, ability.meta.inputSchema);
       
-      // 执行
-      return await (ability.handler as AbilityHandler)(input);
+      // 执行处理器
+      return await ability.handler(input);
     },
     
-    invokeStream: (abilityId: string) => async function* (input: string) {
-      const ability = state.abilities.get(abilityId);
-      if (!ability) {
-        throw new Error(`Ability not found: ${abilityId}`);
-      }
-      if (!ability.meta.isStream) {
-        throw new Error(`Ability ${abilityId} is not streaming, use invoke()`);
-      }
-      
-      // 验证输入
-      validateInput(input, ability.meta.inputSchema);
-      
-      // 执行
-      yield* (ability.handler as AbilityStreamHandler)(input);
-    },
-    
-    register: (meta: AbilityMeta, handler: any) => {
+    register: (meta: AbilityMeta, handler: AbilityHandler) => {
       if (state.abilities.has(meta.id)) {
         throw new Error(`Ability already registered: ${meta.id}`);
       }
@@ -493,6 +520,12 @@ const createAgentBus = (): AgentBus => {
   };
 };
 ```
+
+**关键实现点**：
+
+1. **调用者追踪**：每次调用都记录 `callerId`，用于审计和调试
+2. **简化设计**：移除流式接口，所有能力都是简单的 Promise 返回
+3. **统一验证**：输入验证在总线层统一处理
 
 ### 输入验证
 
@@ -551,58 +584,91 @@ function wrapHandler(
 
 ## 使用模式
 
-### 模式 1：直接调用
+### 模式 1：基本能力调用
 
-简单的一次性调用：
+从任务中调用能力：
 
 ```typescript
-const result = await bus.invoke('task:spawn')('{"goal":"Test"}');
+const result = await bus.invoke(
+  'task-123',
+  'mem:retrieve',
+  JSON.stringify({ query: 'sales data' })
+);
 ```
 
-### 模式 2：部分应用
+### 模式 2：链式能力组合
 
-可重用的调用器：
-
-```typescript
-const spawnTask = bus.invoke('task:spawn');
-
-const task1 = await spawnTask('{"goal":"Task 1"}');
-const task2 = await spawnTask('{"goal":"Task 2"}');
-```
-
-### 模式 3：链式能力
-
-顺序组合：
+顺序组合多个能力调用：
 
 ```typescript
-// 生成任务
-const spawnResult = await bus.invoke('task:spawn')('{"goal":"Analyze"}');
+// 1. 创建任务
+const spawnResult = await bus.invoke(
+  'shell',
+  'task:spawn',
+  JSON.stringify({ goal: 'Analyze Q1 data' })
+);
 const { taskId } = JSON.parse(spawnResult);
 
-// 发送后续消息
-const sendResult = await bus.invoke('task:send')(JSON.stringify({
+// 2. 检索相关记忆
+const memResult = await bus.invoke(
   taskId,
-  message: 'Focus on Q1 data'
-}));
+  'mem:retrieve',
+  JSON.stringify({ query: 'Q1 analysis' })
+);
 
-// 流式输出
-for await (const chunk of bus.invokeStream('task:stream')(`{"taskId":"${taskId}"}`)) {
-  console.log(chunk);
-}
+// 3. 向用户发送进度
+await bus.invoke(
+  taskId,
+  'shell:sendMessageChunk',
+  JSON.stringify({
+    content: 'Found relevant data, analyzing...',
+    messageId: `${taskId}-msg-1`,
+    index: 0
+  })
+);
 ```
 
-### 模式 4：动态发现
+### 模式 3：任务间通信
+
+父子任务或协作任务间的消息传递：
+
+```typescript
+// 父任务创建子任务
+const childResult = await bus.invoke(
+  'task-parent',
+  'task:spawn',
+  JSON.stringify({
+    goal: 'Process subset of data',
+    parentTaskId: 'task-parent'
+  })
+);
+const { taskId: childTaskId } = JSON.parse(childResult);
+
+// 子任务完成后通知父任务
+const sendResult = await bus.invoke(
+  childTaskId,
+  'task:send',
+  JSON.stringify({
+    receiverId: 'task-parent',
+    message: 'Processing complete, found 42 records'
+  })
+);
+```
+
+### 模式 4：动态能力发现
 
 在运行时发现和调用能力：
 
 ```typescript
 // 列出所有模块
-const modulesResult = await bus.invoke('bus:list')('{}');
+const modulesResult = await bus.invoke('system', 'bus:list', '{}');
 const { modules } = JSON.parse(modulesResult);
 
 // 获取每个模块的能力
 for (const module of modules) {
-  const abilitiesResult = await bus.invoke('bus:abilities')(
+  const abilitiesResult = await bus.invoke(
+    'system',
+    'bus:abilities',
     JSON.stringify({ moduleName: module.name })
   );
   console.log(JSON.parse(abilitiesResult));
@@ -614,36 +680,67 @@ for (const module of modules) {
 能力可以自动转换为 LLM 工具定义：
 
 ```typescript
-function abilityToToolDefinition(meta: AbilityMeta): ToolDefinition {
-  return {
-    type: 'function',
-    function: {
-      name: meta.id.replace(':', '_'), // 'task:spawn' → 'task_spawn'
-      description: meta.description,
-      parameters: meta.inputSchema
-    }
+type ToolDefinition = {
+  type: 'function';
+  function: {
+    name: string;
+    description: string;
+    parameters: JSONSchema;
   };
-}
+};
+
+const abilityToToolDefinition = (meta: AbilityMeta): ToolDefinition => ({
+  type: 'function',
+  function: {
+    name: meta.id.replace(':', '_'), // 'task:spawn' → 'task_spawn'
+    description: meta.description,
+    parameters: meta.inputSchema
+  }
+});
 
 // 为 LLM 生成工具定义
-const modules = await bus.invoke('bus:list')('{}');
-const tools: ToolDefinition[] = [];
-
-for (const module of modules) {
-  const abilities = await bus.invoke('bus:abilities')(
-    JSON.stringify({ moduleName: module.name })
-  );
-  for (const ability of abilities) {
-    const meta = await bus.invoke('bus:inspect')(
-      JSON.stringify({ abilityId: ability.id })
+const generateToolsForLLM = async (
+  bus: AgentBus,
+  callerId: string
+): Promise<ToolDefinition[]> => {
+  const modulesResult = await bus.invoke(callerId, 'bus:list', '{}');
+  const { modules } = JSON.parse(modulesResult);
+  
+  const tools: ToolDefinition[] = [];
+  
+  for (const module of modules) {
+    const abilitiesResult = await bus.invoke(
+      callerId,
+      'bus:abilities',
+      JSON.stringify({ moduleName: module.name })
     );
-    tools.push(abilityToToolDefinition(meta));
+    const { abilities } = JSON.parse(abilitiesResult);
+    
+    for (const ability of abilities) {
+      const metaResult = await bus.invoke(
+        callerId,
+        'bus:inspect',
+        JSON.stringify({ abilityId: ability.id })
+      );
+      const { meta } = JSON.parse(metaResult);
+      tools.push(abilityToToolDefinition(meta));
+    }
   }
-}
+  
+  return tools;
+};
 
-// 在 LLM 调用中使用
+// 在任务执行循环中使用
+const tools = await generateToolsForLLM(bus, taskId);
 const response = await llm.complete(messages, { tools });
 ```
+
+**重要说明**：
+
+- LLM 作为 stakeholder 不需要关心能力调用的流式输出过程
+- Task Manager 负责处理 LLM 的流式响应
+- Task Manager 通过 `shell:sendMessageChunk` 逐块向用户推送内容
+- 完整消息累积完成后再保存到 Ledger
 
 ## 测试策略
 
@@ -661,22 +758,48 @@ test('invoke() calls registered ability', async () => {
       moduleName: 'test',
       abilityName: 'echo',
       description: 'Echo input',
-      isStream: false,
       inputSchema: { type: 'object' },
       outputSchema: { type: 'string' }
     },
     async (input: string) => input
   );
   
-  const result = await bus.invoke('test:echo')('{"message":"hello"}');
+  const result = await bus.invoke(
+    'test-caller',
+    'test:echo',
+    '{"message":"hello"}'
+  );
   expect(result).toBe('{"message":"hello"}');
 });
 
 test('invoke() throws for non-existent ability', async () => {
   const bus = createAgentBus();
   await expect(
-    bus.invoke('non:existent')('{}')
+    bus.invoke('test-caller', 'non:existent', '{}')
   ).rejects.toThrow('Ability not found');
+});
+
+test('invoke() tracks caller', async () => {
+  const bus = createAgentBus();
+  
+  bus.register(
+    {
+      id: 'test:track',
+      moduleName: 'test',
+      abilityName: 'track',
+      description: 'Test tracking',
+      inputSchema: { type: 'object' },
+      outputSchema: { type: 'object' }
+    },
+    async (input: string) => '{"ok":true}'
+  );
+  
+  await bus.invoke('task-123', 'test:track', '{}');
+  
+  // 验证调用日志包含 callerId
+  const logs = bus.getCallLog();
+  expect(logs[0].callerId).toBe('task-123');
+  expect(logs[0].abilityId).toBe('test:track');
 });
 ```
 
@@ -685,23 +808,51 @@ test('invoke() throws for non-existent ability', async () => {
 使用多个模块进行测试：
 
 ```typescript
-test('Full flow: task spawn and stream', async () => {
+test('Full flow: task spawn and communication', async () => {
   const bus = createAgentBus();
   const taskManager = createTaskManager(bus);
-  const modelManager = createModelManager(bus);
+  const shellManager = createShellManager(bus);
   
-  // Task manager 注册能力
+  // 模块注册能力
   taskManager.registerAbilities(bus);
-  modelManager.registerAbilities(bus);
+  shellManager.registerAbilities(bus);
   
   // 验证注册
   expect(bus.has('task:spawn')).toBe(true);
-  expect(bus.has('model:llm')).toBe(true);
+  expect(bus.has('task:send')).toBe(true);
+  expect(bus.has('shell:sendMessageChunk')).toBe(true);
   
-  // 使用能力
-  const spawnResult = await bus.invoke('task:spawn')('{"goal":"Test"}');
+  // 测试任务创建
+  const spawnResult = await bus.invoke(
+    'shell',
+    'task:spawn',
+    JSON.stringify({ goal: 'Test task' })
+  );
   const { taskId } = JSON.parse(spawnResult);
   expect(taskId).toBeDefined();
+  
+  // 测试向用户发送消息
+  await bus.invoke(
+    taskId,
+    'shell:sendMessageChunk',
+    JSON.stringify({
+      content: 'Hello user',
+      messageId: 'msg-1',
+      index: -1
+    })
+  );
+  
+  // 测试任务间通信
+  const sendResult = await bus.invoke(
+    taskId,
+    'task:send',
+    JSON.stringify({
+      receiverId: 'task-other',
+      message: 'Test message'
+    })
+  );
+  const { success } = JSON.parse(sendResult);
+  expect(success).toBe(true);
 });
 ```
 
@@ -709,12 +860,23 @@ test('Full flow: task spawn and stream', async () => {
 
 Agent Bus 提供：
 
-✅ **统一接口** 用于所有系统功能
-✅ **解耦通信** 在模块之间
-✅ **能力发现** 通过自托管的内省能力
-✅ **类型安全** 使用 JSON Schema 验证
-✅ **流式支持** 用于实时输出
-✅ **LLM 集成** 通过自动工具定义生成
+✅ **统一接口** 用于所有系统功能  
+✅ **解耦通信** 在模块之间  
+✅ **调用者追踪** 每次调用都携带任务 ID  
+✅ **能力发现** 通过自托管的内省能力  
+✅ **类型安全** 使用 JSON Schema 验证  
+✅ **简化设计** 移除柯里化和流式接口  
+✅ **LLM 集成** 通过自动工具定义生成  
+✅ **任务间通信** 通过 `task:send` 能力  
+✅ **用户输出** 通过 `shell:sendMessageChunk` 能力
+
+**核心设计变更**：
+
+- 所有模块（包括 Shell）都在总线上注册能力
+- 移除"总线上下"的概念区分
+- 简化调用协议：`invoke(callerId, abilityId, input)`
+- LLM 不需要关心流式处理的中间过程
+- Task Manager 负责处理 LLM 流式响应并向用户推送
 
 总线是 Agent OS 的核心，实现了灵活、可发现和松耦合的模块组合。
 

@@ -4,7 +4,7 @@
 
 **Task Manager** 是 Agent OS 的进程管理层。它管理任务的生命周期——从创建到执行再到完成——采用**持久化优先的架构**。与传统的内存执行模型不同，任务执行的每个方面（任务、能力调用、消息）都持续持久化到 Ledger，实现从意外故障中完全恢复。
 
-Task Manager 位于 **Agent Bus 之下**：它既调用总线能力（例如 `model:llm`、`ldg:task:save`），又注册自己的生命周期管理能力（例如 `task:route`、`task:create`、`task:cancel`）。
+Task Manager 在 **Agent Bus** 上注册能力：它既调用总线能力（例如 `model:llm`、`ldg:task:save`、`shell:sendMessageChunk`），又注册自己的生命周期管理和任务间通信能力（例如 `task:spawn`、`task:send`、`task:cancel`）。
 
 ### 关键设计原则
 
@@ -193,25 +193,34 @@ Task Manager 在 Agent Bus 上注册以下能力：
 
 **示例**：
 ```typescript
-const result = await bus.invoke('task:route')(JSON.stringify({
-  message: 'Can you also check Q2 data?'
-}));
+const result = await bus.invoke(
+  'shell',                      // callerId
+  'task:route',                 // abilityId
+  JSON.stringify({
+    message: 'Can you also check Q2 data?'
+  })
+);
 
 const { taskId, confidence } = JSON.parse(result);
 if (taskId) {
   // 路由到现有任务
-  await appendMessageToTask(taskId, message);
+  await bus.invoke('shell', 'task:send', JSON.stringify({
+    receiverId: taskId,
+    message: 'Can you also check Q2 data?'
+  }));
 } else {
   // 创建新任务
-  await createNewTask(message);
+  await bus.invoke('shell', 'task:spawn', JSON.stringify({
+    goal: 'Can you also check Q2 data?'
+  }));
 }
 ```
 
 **路由策略**：参见[消息路由](#消息路由)部分。
 
-### task:create
+### task:spawn
 
-**描述**：创建新任务并持久化到 Memory。
+**描述**：创建新任务并持久化到 Ledger。
 
 **输入模式**：
 ```json
@@ -251,16 +260,20 @@ if (taskId) {
 
 **示例**：
 ```typescript
-const result = await bus.invoke('task:create')(JSON.stringify({
-  goal: 'Analyze Q1 sales data',
-  systemPrompt: 'You are a data analyst assistant.'
-}));
+const result = await bus.invoke(
+  'shell',                      // callerId
+  'task:spawn',                 // abilityId
+  JSON.stringify({
+    goal: 'Analyze Q1 sales data',
+    systemPrompt: 'You are a data analyst assistant.'
+  })
+);
 
 const { taskId } = JSON.parse(result);
 console.log(`Created task: ${taskId}`);
 ```
 
-**实现说明**：此能力创建 Task 实体、初始系统消息和初始用户消息，然后在开始执行之前将所有内容持久化到 Memory。
+**实现说明**：此能力创建 Task 实体、初始系统消息和初始用户消息，然后在开始执行之前将所有内容持久化到 Ledger。
 
 ### task:cancel
 
@@ -299,15 +312,88 @@ console.log(`Created task: ${taskId}`);
 
 **示例**：
 ```typescript
-const result = await bus.invoke('task:cancel')(JSON.stringify({
-  taskId: 'task-abc123',
-  reason: 'User requested cancellation'
-}));
+const result = await bus.invoke(
+  'shell',                      // callerId
+  'task:cancel',                // abilityId
+  JSON.stringify({
+    taskId: 'task-abc123',
+    reason: 'User requested cancellation'
+  })
+);
 
 const { success } = JSON.parse(result);
 ```
 
 **行为**：将任务的 `completionStatus` 设置为 `'cancelled'`，停止执行循环，并将所有进行中的调用标记为失败。
+
+### task:send
+
+**描述**：向指定任务发送消息，用于任务间通信。
+
+**输入模式**：
+```json
+{
+  "type": "object",
+  "properties": {
+    "receiverId": {
+      "type": "string",
+      "description": "接收消息的任务 ID"
+    },
+    "message": {
+      "type": "string",
+      "description": "要发送的消息内容"
+    }
+  },
+  "required": ["receiverId", "message"]
+}
+```
+
+**输出模式**：
+```json
+{
+  "type": "object",
+  "properties": {
+    "success": {
+      "type": "boolean",
+      "description": "是否成功发送"
+    },
+    "error": {
+      "type": "string",
+      "description": "失败时的错误信息"
+    }
+  },
+  "required": ["success"]
+}
+```
+
+**示例**：
+```typescript
+// 任务 A 向任务 B 发送消息
+const result = await bus.invoke(
+  'task-a',                     // callerId
+  'task:send',                  // abilityId
+  JSON.stringify({
+    receiverId: 'task-b',
+    message: 'Processing complete, found 42 records'
+  })
+);
+
+const { success, error } = JSON.parse(result);
+if (!success) {
+  console.error(`Failed to send message: ${error}`);
+}
+```
+
+**行为**：
+- 验证接收方任务存在且状态为进行中
+- 将消息作为 `user` 角色消息追加到接收方任务的对话历史
+- 触发接收方任务的执行循环（如果未在运行中）
+- 如果接收方任务不存在或已完成，返回错误
+
+**使用场景**：
+- 父子任务间的通信和协调
+- 并行任务间的数据传递
+- 任务完成后通知其他任务
 
 ### task:active
 
@@ -350,9 +436,13 @@ const { success } = JSON.parse(result);
 
 **示例**：
 ```typescript
-const result = await bus.invoke('task:active')(JSON.stringify({
-  limit: 10
-}));
+const result = await bus.invoke(
+  'system',                     // callerId
+  'task:active',                // abilityId
+  JSON.stringify({
+    limit: 10
+  })
+);
 
 const { tasks } = JSON.parse(result);
 console.log(`${tasks.length} active tasks`);
@@ -378,10 +468,11 @@ console.log(`${tasks.length} active tasks`);
                     │
                     ▼
 ┌─────────────────────────────────────────────────┐
-│ 3. 流式传输 LLM 响应                             │
-│    - 将内容块输出给用户                           │
+│ 3. 处理 LLM 响应                                  │
+│    - 逐块调用 shell:sendMessageChunk 向用户推送  │
+│    - 累积完整消息内容                             │
 │    - 收集工具调用                                │
-│    - 将助手消息保存到 Memory                      │
+│    - 将完整助手消息保存到 Ledger                  │
 └───────────────────┬─────────────────────────────┘
                     │
                     ▼

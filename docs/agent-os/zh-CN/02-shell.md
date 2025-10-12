@@ -6,9 +6,9 @@
 
 ## 设计原则
 
-1. **无状态**：Shell 不维护任何状态；所有状态都存在于 Task Manager 和 Memory 中
-2. **薄层**：Shell 只将 HTTP 请求转换为总线调用，并将响应转换回 HTTP
-3. **纯消费者**：Shell 仅调用能力，从不注册任何能力
+1. **双重角色**：Shell 既是能力提供者（`shell:sendMessageChunk`）也是能力消费者（调用其他能力）
+2. **薄层**：Shell 只将 HTTP 请求转换为总线调用，并维护 SSE 连接
+3. **无状态核心**：除 SSE 连接外，Shell 不维护业务状态
 4. **流式优先**：设计用于通过 SSE 进行实时流式响应
 
 ## HTTP API 设计
@@ -46,17 +46,23 @@ async function handleSend(req: Request): Promise<Response> {
   const { message, taskId } = await req.json();
   
   if (taskId) {
-    // 追加到现有任务
-    const result = await bus.invoke('task:send')(JSON.stringify({
-      taskId,
-      message
-    }));
+    // 向现有任务发送消息
+    const result = await bus.invoke(
+      'shell',                          // callerId
+      'task:send',                       // abilityId
+      JSON.stringify({
+        receiverId: taskId,
+        message
+      })
+    );
     return Response.json(JSON.parse(result));
   } else {
     // 创建新任务
-    const result = await bus.invoke('task:spawn')(JSON.stringify({
-      goal: message
-    }));
+    const result = await bus.invoke(
+      'shell',                          // callerId
+      'task:spawn',                      // abilityId
+      JSON.stringify({ goal: message })
+    );
     return Response.json(JSON.parse(result));
   }
 }
@@ -100,31 +106,39 @@ data: {"type":"end","taskId":"task-123","status":"completed"}
 
 **实现流程**：
 ```typescript
-// 伪代码
+// Shell 维护活动的 SSE 连接映射
+type SSEConnection = {
+  taskId: string;
+  controller: ReadableStreamDefaultController;
+  messageBuffer: Map<string, Array<{ content: string; index: number }>>;
+};
+
+const activeConnections = new Map<string, SSEConnection>();
+
+// 处理 /stream/:taskId 请求
 async function handleStream(req: Request): Promise<Response> {
   const taskId = req.params.taskId;
   
   const stream = new ReadableStream({
-    async start(controller) {
-      try {
-        // 从总线获取任务输出流
-        const outputStream = bus.invokeStream('task:stream')(
-          JSON.stringify({ taskId })
-        );
-        
-        for await (const chunk of outputStream) {
-          // 解析输出并格式化为 SSE
-          const output = JSON.parse(chunk);
-          const sseData = formatSSE(output);
-          controller.enqueue(sseData);
-        }
-        
-        controller.close();
-      } catch (error) {
-        const errorData = formatSSE({ type: 'error', error: error.message });
-        controller.enqueue(errorData);
-        controller.close();
-      }
+    start(controller) {
+      // 注册此 SSE 连接
+      activeConnections.set(taskId, {
+        taskId,
+        controller,
+        messageBuffer: new Map()
+      });
+      
+      // 发送连接建立事件
+      const startEvent = formatSSE({
+        type: 'start',
+        taskId
+      });
+      controller.enqueue(startEvent);
+    },
+    
+    cancel() {
+      // 清理连接
+      activeConnections.delete(taskId);
     }
   });
   
@@ -137,12 +151,12 @@ async function handleStream(req: Request): Promise<Response> {
   });
 }
 
-function formatSSE(data: any): Uint8Array {
+const formatSSE = (data: any): Uint8Array => {
   const type = data.type || 'message';
   const json = JSON.stringify(data);
   const sse = `event: ${type}\ndata: ${json}\n\n`;
   return new TextEncoder().encode(sse);
-}
+};
 ```
 
 ### 3. GET /inspection/* - 检查 API（保留）
@@ -166,6 +180,168 @@ GET /inspection/abilities          # 列出所有能力
 - `/inspection/memory/stats` → `mem:stats`
 - `/inspection/models` → `model:list`
 - `/inspection/abilities` → `bus:list` + `bus:abilities`
+
+## Shell 注册的能力
+
+### shell:sendMessageChunk - 向用户发送消息片段
+
+**描述**：接收来自任务的消息片段，并通过 SSE 连接推送给用户。这是任务向用户输出的主要机制。
+
+**输入模式**：
+```json
+{
+  "type": "object",
+  "properties": {
+    "content": {
+      "type": "string",
+      "description": "消息内容片段"
+    },
+    "messageId": {
+      "type": "string",
+      "description": "消息的唯一标识符，用于组装多个片段"
+    },
+    "index": {
+      "type": "number",
+      "description": "片段索引。>= 0 表示还有后续片段，< 0 表示消息结束"
+    }
+  },
+  "required": ["content", "messageId", "index"]
+}
+```
+
+**输出模式**：
+```json
+{
+  "type": "object",
+  "properties": {
+    "success": {
+      "type": "boolean",
+      "description": "是否成功推送"
+    },
+    "error": {
+      "type": "string",
+      "description": "失败时的错误信息"
+    }
+  },
+  "required": ["success"]
+}
+```
+
+**实现**：
+```typescript
+// 注册 shell:sendMessageChunk 能力
+bus.register(
+  {
+    id: 'shell:sendMessageChunk',
+    moduleName: 'shell',
+    abilityName: 'sendMessageChunk',
+    description: '向用户发送消息片段',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        content: { type: 'string' },
+        messageId: { type: 'string' },
+        index: { type: 'number' }
+      },
+      required: ['content', 'messageId', 'index']
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean' },
+        error: { type: 'string' }
+      },
+      required: ['success']
+    }
+  },
+  async (input: string) => {
+    const { content, messageId, index } = JSON.parse(input);
+    
+    // 从 callerId 中提取 taskId（格式：'task-xxx'）
+    // 注意：实际实现中，callerId 需要从总线上下文传递
+    const taskId = extractTaskIdFromContext();
+    
+    const connection = activeConnections.get(taskId);
+    if (!connection) {
+      return JSON.stringify({
+        success: false,
+        error: `No active SSE connection for task ${taskId}`
+      });
+    }
+    
+    // 获取或创建消息缓冲区
+    if (!connection.messageBuffer.has(messageId)) {
+      connection.messageBuffer.set(messageId, []);
+    }
+    const buffer = connection.messageBuffer.get(messageId)!;
+    
+    // 添加片段到缓冲区
+    buffer.push({ content, index });
+    
+    // 发送内容片段
+    const chunkEvent = formatSSE({
+      type: 'content',
+      messageId,
+      content,
+      index
+    });
+    connection.controller.enqueue(chunkEvent);
+    
+    // 如果是最后一个片段，清理缓冲区
+    if (index < 0) {
+      connection.messageBuffer.delete(messageId);
+      
+      // 发送消息完成事件
+      const completeEvent = formatSSE({
+        type: 'message_complete',
+        messageId
+      });
+      connection.controller.enqueue(completeEvent);
+    }
+    
+    return JSON.stringify({ success: true });
+  }
+);
+```
+
+**使用示例**：
+
+任务向用户推送流式内容：
+
+```typescript
+// Task Manager 在处理 LLM 流式响应时
+for await (const chunk of llmStream) {
+  await bus.invoke(
+    taskId,
+    'shell:sendMessageChunk',
+    JSON.stringify({
+      content: chunk.content,
+      messageId: currentMessageId,
+      index: chunkIndex++
+    })
+  );
+}
+
+// 发送最后一个片段，标记消息结束
+await bus.invoke(
+  taskId,
+  'shell:sendMessageChunk',
+  JSON.stringify({
+    content: '',
+    messageId: currentMessageId,
+    index: -1
+  })
+);
+```
+
+**协议说明**：
+
+1. **消息片段化**：长消息可以分多个片段发送
+2. **index 语义**：
+   - `index >= 0`：消息还有后续片段
+   - `index < 0`：消息结束，不再有后续片段
+3. **messageId**：用于区分不同消息的片段
+4. **缓冲机制**：Shell 维护消息缓冲区，确保片段按序组装
 
 ## 错误处理
 
@@ -272,15 +448,23 @@ function connectSSE(taskId: string) {
 始终在 try-catch 中包装总线调用：
 
 ```typescript
-async function invokeBus(abilityId: string, input: any): Promise<any> {
+const invokeBus = async (
+  callerId: string,
+  abilityId: string,
+  input: any
+): Promise<any> => {
   try {
-    const result = await bus.invoke(abilityId)(JSON.stringify(input));
+    const result = await bus.invoke(
+      callerId,
+      abilityId,
+      JSON.stringify(input)
+    );
     return JSON.parse(result);
   } catch (error) {
     console.error(`Bus invocation failed: ${abilityId}`, error);
     throw error;
   }
-}
+};
 ```
 
 ### 3. 请求验证
@@ -327,7 +511,7 @@ if (req.method === 'OPTIONS') {
 
 ### 初始化
 
-Shell 使用对 Agent Bus 的引用进行初始化：
+Shell 使用对 Agent Bus 的引用进行初始化，并注册自己的能力：
 
 ```typescript
 type Shell = {
@@ -337,6 +521,24 @@ type Shell = {
 
 type CreateShell = (bus: AgentBus) => Shell;
 
+const createShell = (bus: AgentBus): Shell => {
+  // 注册 shell:sendMessageChunk 能力
+  registerShellAbilities(bus);
+  
+  return {
+    start: async (port: number) => {
+      // 启动 HTTP 服务器
+      // ...
+    },
+    stop: async () => {
+      // 清理所有活动的 SSE 连接
+      activeConnections.clear();
+      // 停止 HTTP 服务器
+      // ...
+    }
+  };
+};
+
 // 使用方式
 const shell = createShell(bus);
 await shell.start(3000);
@@ -344,12 +546,14 @@ await shell.start(3000);
 
 ### 总线依赖
 
-Shell 依赖于已注册的以下能力：
+**Shell 提供的能力**：
+- `shell:sendMessageChunk` - 接收任务的消息片段并推送给用户
+
+**Shell 依赖的能力**：
 
 **必需**：
 - `task:spawn` - 创建新任务
 - `task:send` - 向任务发送消息
-- `task:stream` - 流式传输任务输出
 
 **可选**（用于检查）：
 - `task:list` - 列出任务
@@ -364,17 +568,20 @@ Shell 依赖于已注册的以下能力：
 在启动时验证所需能力：
 
 ```typescript
-async function verifyDependencies(bus: AgentBus): Promise<void> {
-  const required = ['task:spawn', 'task:send', 'task:stream'];
+const verifyDependencies = async (bus: AgentBus): Promise<void> => {
+  const required = ['task:spawn', 'task:send'];
   
   for (const abilityId of required) {
-    try {
-      await bus.invoke('bus:inspect')(JSON.stringify({ abilityId }));
-    } catch (error) {
+    if (!bus.has(abilityId)) {
       throw new Error(`Required ability not found: ${abilityId}`);
     }
   }
-}
+  
+  // 验证 Shell 自己的能力已注册
+  if (!bus.has('shell:sendMessageChunk')) {
+    throw new Error('Shell ability not registered: shell:sendMessageChunk');
+  }
+};
 ```
 
 ## 示例：完整的请求流程
@@ -549,12 +756,20 @@ test('Full flow: send message and stream output', async () => {
 
 Shell 模块提供：
 
-✅ **简单的 HTTP API** 用于消息发送和流式传输
-✅ **无状态设计** - 所有状态在 Task Manager 中
-✅ **纯总线消费者** - 薄转换层
-✅ **SSE 流式传输** 用于实时输出
-✅ **保留的检查端点** 用于监控
+✅ **简单的 HTTP API** 用于消息发送和 SSE 流式传输  
+✅ **双重角色** - 既是能力提供者也是消费者  
+✅ **shell:sendMessageChunk 能力** - 任务向用户推送消息的接口  
+✅ **SSE 连接管理** - 维护活动连接和消息缓冲  
+✅ **简化调用协议** - 使用 `invoke(callerId, abilityId, input)`  
+✅ **保留的检查端点** 用于监控  
 ✅ **标准错误处理** 使用 HTTP 状态码
+
+**核心变更**：
+
+- Shell 现在在总线上注册 `shell:sendMessageChunk` 能力
+- 所有总线调用都携带 `callerId` 参数
+- 移除 `task:stream` 依赖，改为通过 `shell:sendMessageChunk` 接收推送
+- 消息片段化协议支持流式传输
 
 Shell 有意保持最小化，将所有业务逻辑委托给 Agent Bus 和底层模块。
 

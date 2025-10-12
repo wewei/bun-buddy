@@ -11,58 +11,56 @@ Agent OS 是使用**操作系统总线架构**对 Agent 系统的完全重写。
 与传统的分层架构不同，Agent OS 使用**基于总线的架构**，所有模块通过中央 Agent Bus 进行通信。这解耦了依赖关系，并支持灵活的模块组合。
 
 ```
-                 ┌────────────────────┐
-                 │  Shell (HTTP API)  │  ← 总线之上
-                 └──────────┬─────────┘
-                            │ invoke/invokeStream
-                            ▼
       ╔══════════════════════════════════════════════════════════╗
       ║              Agent Bus Controller                        ║
-      ║  - invoke(abilityId)(input)                              ║
-      ║  - invokeStream(abilityId)(input)                        ║
+      ║  - invoke(callerId, abilityId, input)                    ║
       ║  - Ability Discovery (list/schema/inspect)               ║
       ╚══════════════════════════════════════════════════════════╝
-               ▲          ▲          ▲          ▲          ▲
-      ┌────────┘          │          │          │          └────────┐
-      │                   │          │          │                   │
-┌─────▼──────┐  ┌─────────▼───┐  ┌──▼───────┐  ┌────▼─────┐  ┌────▼─────┐
-│   Task     │  │    Model    │  │  Ledger  │  │  Memory  │  │  Bus     │
-│  Manager   │  │   Manager   │  │ (SQLite) │  │(Semantic)│  │  Ctrl    │
-├────────────┤  ├─────────────┤  ├──────────┤  ├──────────┤  ├──────────┤
-│task:route  │  │model:llm    │  │ldg:task:*│  │mem:      │  │bus:list  │
-│task:create │  │model:embed  │  │ldg:call:*│  │ retrieve │  │bus:schema│
-│task:cancel │  │model:list   │  │ldg:msg:* │  │mem:graph │  │bus:      │
-│task:active │  │             │  │          │  │mem:      │  │ inspect  │
-│            │  │             │  │          │  │ archive  │  │          │
-└────────────┘  └─────────────┘  └──────────┘  └──────────┘  └──────────┘
-      ▲ 总线之下：既调用也注册能力
+               ▲          ▲          ▲          ▲          ▲          ▲
+      ┌────────┘          │          │          │          │          └────────┐
+      │                   │          │          │          │                   │
+┌─────▼──────┐  ┌─────────▼───┐  ┌──▼───────┐  ┌────▼─────┐  ┌────▼─────┐  ┌──▼──────┐
+│   Shell    │  │    Task     │  │  Model   │  │  Ledger  │  │  Memory  │  │  Bus    │
+│ (HTTP API) │  │  Manager    │  │ Manager  │  │ (SQLite) │  │(Semantic)│  │  Ctrl   │
+├────────────┤  ├─────────────┤  ├──────────┤  ├──────────┤  ├──────────┤  ├─────────┤
+│shell:send  │  │task:spawn   │  │model:llm │  │ldg:task:*│  │mem:      │  │bus:list │
+│MessageChunk│  │task:send    │  │model:    │  │ldg:call:*│  │ retrieve │  │bus:     │
+│            │  │task:cancel  │  │ embed    │  │ldg:msg:* │  │mem:graph │  │ schema  │
+│            │  │task:route   │  │model:list│  │          │  │mem:      │  │bus:     │
+│            │  │task:active  │  │          │  │          │  │ archive  │  │ inspect │
+└────────────┘  └─────────────┘  └──────────┘  └──────────┘  └──────────┘  └─────────┘
+      ▲ 所有模块都在总线上注册能力并调用其他能力
 ```
 
 ### 术语
 
-- **总线之上（Above Bus）**：仅调用能力但不注册任何能力的模块（例如 Shell）
-- **总线之下（Below Bus）**：既调用又注册能力的模块（例如 Task Manager、Ledger、Memory、Model Manager、Bus Controller）
-- **能力（Ability）**：具有签名 `(input: string) => Promise<string>` 或 `(input: string) => AsyncGenerator<string>` 的可调用功能
-- **能力 ID（Ability ID）**：遵循 `${moduleName}:${abilityName}` 模式的唯一标识符（例如 `task:route`、`ldg:task:save`、`mem:retrieve`）
+- **能力（Ability）**：具有签名 `(input: string) => Promise<string>` 的可调用功能单元
+- **能力 ID（Ability ID）**：遵循 `${moduleName}:${abilityName}` 模式的唯一标识符（例如 `task:spawn`、`shell:sendMessageChunk`、`mem:retrieve`）
+- **调用者 ID（Caller ID）**：发起能力调用的任务 ID，用于追踪和审计
+- **能力调用**：`invoke(callerId, abilityId, input)` - 所有模块间通信都通过此接口
 
 ## 模块职责
 
-### 1. Shell（总线之上）
+### 1. Shell
 
-**目的**：面向用户的 HTTP API 层
+**目的**：面向用户的 HTTP API 层和消息输出接口
 
 **职责**：
-- 通过 `POST /send` 接收传入消息
-- 通过 `GET /stream/:taskId` 使用 SSE 流式传输任务输出
+- 通过 `POST /send` 接收传入用户消息
+- 通过 `GET /stream/:taskId` 使用 SSE 流式传输任务输出给用户
 - 提供检查端点（保留供将来使用）
 - 将 HTTP 请求转换为 Agent Bus 调用
+- 提供 `shell:sendMessageChunk` 能力供任务向用户推送消息
+
+**注册的能力**：
+- `shell:sendMessageChunk` - 接收来自任务的消息片段并通过 SSE 推送给用户
 
 **关键特性**：
-- 不注册任何能力
-- Agent Bus 的纯消费者
+- 既是能力提供者（shell:sendMessageChunk）也是能力消费者
+- 维护 SSE 连接用于向用户流式传输消息
 - 无状态请求处理器
 
-### 2. Agent Bus Controller（总线之下）
+### 2. Agent Bus Controller
 
 **目的**：中央通信枢纽和能力注册表
 
@@ -70,7 +68,7 @@ Agent OS 是使用**操作系统总线架构**对 Agent 系统的完全重写。
 - 将能力调用路由到已注册的模块
 - 维护带有元数据的能力注册表
 - 提供能力发现机制
-- 处理同步和流式调用
+- 追踪所有能力调用的 callerId
 
 **注册的能力**：
 - `bus:list` - 列出所有已注册的模块
@@ -78,28 +76,34 @@ Agent OS 是使用**操作系统总线架构**对 Agent 系统的完全重写。
 - `bus:schema` - 获取能力输入/输出模式
 - `bus:inspect` - 获取能力元数据
 
-### 3. Task Manager（总线之下）
+**调用接口**：
+- `invoke(callerId, abilityId, input)` - 统一的能力调用接口
 
-**目的**：进程/任务生命周期管理
+### 3. Task Manager
+
+**目的**：进程/任务生命周期管理和任务间通信
 
 **职责**：
 - 将用户消息路由到适当的任务
 - 创建和取消任务
 - 使用 LLM 执行任务运行循环
 - 将所有执行状态持久化到 Ledger
+- 处理任务间消息传递
 
 **注册的能力**：
-- `task:route` - 将消息路由到任务
-- `task:create` - 创建新任务
+- `task:spawn` - 创建新任务
+- `task:send` - 向指定任务发送消息（任务间通信）
 - `task:cancel` - 取消任务
+- `task:route` - 将用户消息路由到任务
 - `task:active` - 列出活动任务
 
 **关键功能**： 
 - 持久化优先的架构，持续保存状态到 Ledger
-- 基于完成时间戳的流式消息处理
+- 处理 LLM 流式响应并通过 `shell:sendMessageChunk` 向用户推送
 - 完整的崩溃恢复能力
+- 支持任务间通信和协作
 
-### 4. Model Manager（总线之下）
+### 4. Model Manager
 
 **目的**：LLM 提供商的 ABI（应用程序二进制接口）
 
@@ -107,13 +111,15 @@ Agent OS 是使用**操作系统总线架构**对 Agent 系统的完全重写。
 - 抽象 LLM 和 Embedding API 调用
 - 管理模型实例和配置
 - 提供跨不同提供商的统一接口
-- 处理流式响应
+- 返回 LLM 完整响应（流式处理由调用方负责）
 
 **注册的能力**：
 - `model:llm` - 调用 LLM 完成
 - `model:embed` - 生成嵌入
 - `model:list` - 列出可用模型
 - `model:register` - 注册模型实例
+
+**注意**：Model Manager 返回完整的 LLM 响应，不涉及流式传输。流式处理由 Task Manager 在内部处理。
 
 ### 5. Ledger（总线之下）
 
@@ -218,30 +224,43 @@ src/service/agent-os/
 
 **正确**：
 ```typescript
-// 模块 A 通过总线调用模块 B
-const result = await bus.invoke('moduleB:action')('input data');
+// 模块 A（任务）通过总线调用模块 B 的能力
+const result = await bus.invoke(
+  'task-123',              // callerId
+  'mem:retrieve',          // abilityId
+  JSON.stringify({ query: 'data' })  // input
+);
 ```
 
 **错误**：
 ```typescript
 // 模块 A 直接导入模块 B
-import { moduleB } from '../moduleB';
-const result = await moduleB.action('input data');
+import { memoryManager } from '../memory';
+const result = await memoryManager.retrieve('data');
 ```
 
 ### 2. 统一的能力接口
 
-每个能力遵循以下两种签名之一：
+每个能力遵循统一的签名：
 
 ```typescript
-// 同步（单个响应）
-type AbilitySync = (input: string) => Promise<string>;
-
-// 流式（多个块）
-type AbilityStream = (input: string) => AsyncGenerator<string>;
+type AbilityHandler = (input: string) => Promise<string>;
 ```
 
 输入和输出始终是字符串。复杂数据结构使用 JSON 编码。
+
+**调用协议**：
+```typescript
+type AgentBus = {
+  invoke: (callerId: string, abilityId: string, input: string) => Promise<string>;
+  // ... 其他方法
+};
+```
+
+**关键点**：
+- 所有能力调用都携带 `callerId` 用于追踪
+- 移除了流式接口，简化设计
+- LLM 不需要关心能力调用的流式过程
 
 ### 3. 能力 ID 命名约定
 
@@ -266,14 +285,15 @@ type AbilityMeta = {
   description: string;
   inputSchema: JSONSchema;
   outputSchema: JSONSchema;
-  isStream: boolean;
+  tags?: string[];
 };
 ```
 
 这实现了：
-- 运行时验证
+- 运行时输入验证
 - 自动生成文档
-- LLM 的工具定义
+- LLM 的工具定义生成
+- 能力分类和发现
 
 ### 5. 函数式风格
 
@@ -327,17 +347,23 @@ Bus Controller 提供内省能力：
                   │
                   ▼
 ┌──────────────────────────────────────────────────┐
-│ Shell 调用 bus:invoke('task:spawn')(message)     │
+│ Shell 调用 bus.invoke('shell', 'task:spawn', ...) │
 └─────────────────┬────────────────────────────────┘
                   │
                   ▼
 ┌──────────────────────────────────────────────────┐
-│ Task Manager 创建 goal=message 的任务             │
+│ Task Manager 创建任务，返回 taskId                │
 └─────────────────┬────────────────────────────────┘
                   │
                   ▼
 ┌──────────────────────────────────────────────────┐
-│ Task Run Loop 使用上下文调用 model:llm           │
+│ Task Run Loop 调用 model:llm 获取 LLM 响应       │
+└─────────────────┬────────────────────────────────┘
+                  │
+                  ▼
+┌──────────────────────────────────────────────────┐
+│ Task Manager 逐块调用 shell:sendMessageChunk     │
+│ 向用户推送 LLM 流式内容                           │
 └─────────────────┬────────────────────────────────┘
                   │
                   ▼
@@ -347,19 +373,25 @@ Bus Controller 提供内省能力：
                   │
                   ▼
 ┌──────────────────────────────────────────────────┐
-│ Task Run Loop 通过总线调用能力                    │
+│ Task Manager 调用 bus.invoke(taskId, 'mem:...')  │
 └─────────────────┬────────────────────────────────┘
                   │
                   ▼
 ┌──────────────────────────────────────────────────┐
-│ LLM 生成最终响应                                  │
+│ LLM 生成最终响应，Task Manager 推送给用户         │
 └─────────────────┬────────────────────────────────┘
                   │
                   ▼
 ┌──────────────────────────────────────────────────┐
-│ Shell 通过 SSE 流式传输输出给用户                 │
+│ 完整消息保存到 Ledger，任务标记为完成            │
 └──────────────────────────────────────────────────┘
 ```
+
+**关键点**：
+- Shell 维护 SSE 连接，接收 `shell:sendMessageChunk` 调用
+- Task Manager 处理 LLM 流式响应，逐块推送给用户
+- LLM 作为 stakeholder 不感知流式传输的细节
+- 完整消息累积后才保存到 Ledger
 
 ## 与现有系统的集成
 
@@ -393,13 +425,24 @@ src/service/
 
 Agent OS 架构提供：
 
-✅ **解耦模块**通过基于总线的通信
-✅ **统一接口**用于所有能力
-✅ **可发现的功能**通过内省
-✅ **持久化优先设计**使用 SQLite Ledger
-✅ **可选语义层**使用 Memory（向量 + 图）
+✅ **统一能力总线**所有模块都在总线上注册能力  
+✅ **简化调用协议** `invoke(callerId, abilityId, input)`  
+✅ **调用者追踪**每次调用都携带任务 ID  
+✅ **解耦模块**通过基于总线的通信  
+✅ **可发现的功能**通过内省能力  
+✅ **持久化优先设计**使用 SQLite Ledger  
+✅ **可选语义层**使用 Memory（向量 + 图）  
+✅ **任务间通信**通过 `task:send` 能力  
+✅ **用户输出机制**通过 `shell:sendMessageChunk` 能力  
 ✅ **清晰的关注点分离**（Shell、Task、Model、Ledger、Memory）
-✅ **并行开发**与现有系统并存
 
-OS 类比使系统直观：Shell 用于用户交互，Task Manager 用于进程，Ledger 用于事务日志，Memory 用于语义索引，Model Manager 用于硬件抽象，Agent Bus 作为连接一切的系统总线。
+**核心设计变更**：
+
+- 移除"总线上下"概念，所有模块平等
+- Shell 现在也提供能力（`shell:sendMessageChunk`）
+- 移除柯里化和流式接口，简化设计
+- LLM 不需要关心流式处理的中间过程
+- Task Manager 负责处理 LLM 流式响应
+
+OS 类比使系统直观：Shell 用于用户交互和输出，Task Manager 用于进程管理和任务间通信，Ledger 用于事务日志，Memory 用于语义索引，Model Manager 用于硬件抽象，Agent Bus 作为连接一切的系统总线。
 
