@@ -44,12 +44,12 @@ export type Message = {
 
 export type JSONSchema = {
   type: string;
-  properties?: Record<string, any>;
+  properties?: Record<string, unknown>;
   required?: string[];
-  items?: any;
+  items?: unknown;
   enum?: string[];
   description?: string;
-  [key: string]: any;
+  [key: string]: unknown;
 };
 
 export type AbilityHandler = (input: string) => Promise<string>;

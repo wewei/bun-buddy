@@ -2,8 +2,9 @@
 
 import Ajv from 'ajv';
 
-import { registerAbility, unregisterAbility, hasAbility, getAbility } from './registry';
 import { registerBusControllerAbilities } from './controller';
+import { registerAbility, unregisterAbility, hasAbility, getAbility } from './registry';
+
 import type { BusState } from './types';
 import type { AgentBus, AbilityMeta, AbilityHandler, CallLogEntry, JSONSchema } from '../types';
 
