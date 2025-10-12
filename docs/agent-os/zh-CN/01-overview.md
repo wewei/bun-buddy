@@ -24,7 +24,7 @@ Agent OS 是使用**操作系统总线架构**对 Agent 系统的完全重写。
 │ (HTTP API) │  │  Manager    │  │ Manager  │  │ (SQLite) │  │(Semantic)│  │  Ctrl   │
 ├────────────┤  ├─────────────┤  ├──────────┤  ├──────────┤  ├──────────┤  ├─────────┤
 │shell:send  │  │task:spawn   │  │model:llm │  │ldg:task:*│  │mem:      │  │bus:list │
-│MessageChunk│  │task:send    │  │model:    │  │ldg:call:*│  │ retrieve │  │bus:     │
+│            │  │task:send    │  │model:    │  │ldg:call:*│  │ retrieve │  │bus:     │
 │            │  │task:cancel  │  │ embed    │  │ldg:msg:* │  │mem:graph │  │ schema  │
 │            │  │task:route   │  │model:list│  │          │  │mem:      │  │bus:     │
 │            │  │task:active  │  │          │  │          │  │ archive  │  │ inspect │
@@ -50,13 +50,13 @@ Agent OS 是使用**操作系统总线架构**对 Agent 系统的完全重写。
 - 通过 `GET /stream/:taskId` 使用 SSE 流式传输任务输出给用户
 - 提供检查端点（保留供将来使用）
 - 将 HTTP 请求转换为 Agent Bus 调用
-- 提供 `shell:sendMessageChunk` 能力供任务向用户推送消息
+- 提供 `shell:send` 能力供任务向用户推送消息
 
 **注册的能力**：
-- `shell:sendMessageChunk` - 接收来自任务的消息片段并通过 SSE 推送给用户
+- `shell:send` - 接收来自任务的消息片段并通过 SSE 推送给用户
 
 **关键特性**：
-- 既是能力提供者（shell:sendMessageChunk）也是能力消费者
+- 既是能力提供者（shell:send）也是能力消费者
 - 维护 SSE 连接用于向用户流式传输消息
 - 无状态请求处理器
 
@@ -90,8 +90,6 @@ Agent OS 是使用**操作系统总线架构**对 Agent 系统的完全重写。
 - 处理任务间消息传递
 - 任务生命周期管理
 
-**注意**：消息路由不再是 Task Manager 的职责，而是由专门的路由任务处理
-
 **注册的能力**：
 - `task:spawn` - 创建新任务
 - `task:send` - 向指定任务发送消息（任务间通信）
@@ -100,7 +98,7 @@ Agent OS 是使用**操作系统总线架构**对 Agent 系统的完全重写。
 
 **关键功能**： 
 - 持久化优先的架构，持续保存状态到 Ledger
-- 处理 LLM 流式响应并通过 `shell:sendMessageChunk` 向用户推送
+- 处理 LLM 流式响应并通过 `shell:send` 向用户推送
 - 完整的崩溃恢复能力
 - 支持任务间通信和协作
 
@@ -364,7 +362,7 @@ Bus Controller 提供内省能力：
                   │
                   ▼
 ┌──────────────────────────────────────────────────┐
-│ Task Manager 逐块调用 shell:sendMessageChunk     │
+│ Task Manager 逐块调用 shell:send                  │
 │ 向用户推送 LLM 流式内容                           │
 └─────────────────┬────────────────────────────────┘
                   │
@@ -390,7 +388,7 @@ Bus Controller 提供内省能力：
 ```
 
 **关键点**：
-- Shell 维护 SSE 连接，接收 `shell:sendMessageChunk` 调用
+- Shell 维护 SSE 连接，接收 `shell:send` 调用
 - Task Manager 处理 LLM 流式响应，逐块推送给用户
 - LLM 作为 stakeholder 不感知流式传输的细节
 - 完整消息累积后才保存到 Ledger
@@ -435,13 +433,13 @@ Agent OS 架构提供：
 ✅ **持久化优先设计**使用 SQLite Ledger  
 ✅ **可选语义层**使用 Memory（向量 + 图）  
 ✅ **任务间通信**通过 `task:send` 能力  
-✅ **用户输出机制**通过 `shell:sendMessageChunk` 能力  
+✅ **用户输出机制**通过 `shell:send` 能力  
 ✅ **清晰的关注点分离**（Shell、Task、Model、Ledger、Memory）
 
 **核心设计变更**：
 
 - 移除"总线上下"概念，所有模块平等
-- Shell 现在也提供能力（`shell:sendMessageChunk`）
+- Shell 现在也提供能力（`shell:send`）
 - 移除柯里化和流式接口，简化设计
 - LLM 不需要关心流式处理的中间过程
 - Task Manager 负责处理 LLM 流式响应

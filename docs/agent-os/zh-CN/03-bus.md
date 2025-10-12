@@ -34,7 +34,7 @@
 │  │    'task:spawn': { meta, handler },     │  │
 │  │    'model:llm': { meta, handler },      │  │
 │  │    'mem:retrieve': { meta, handler },   │  │
-│  │    'shell:sendMessageChunk': { ... }    │  │
+│  │    'shell:send': { meta, handler }      │  │
 │  │  }                                       │  │
 │  └──────────────────────────────────────────┘  │
 │                                                 │
@@ -147,7 +147,7 @@ const memResult = await bus.invoke(
 // 向用户发送消息片段
 await bus.invoke(
   'task-abc123',
-  'shell:sendMessageChunk',
+  'shell:send',
   JSON.stringify({
     content: 'Processing your request...',
     messageId: 'msg-001',
@@ -619,7 +619,7 @@ const memResult = await bus.invoke(
 // 3. 向用户发送进度
 await bus.invoke(
   taskId,
-  'shell:sendMessageChunk',
+  'shell:send',
   JSON.stringify({
     content: 'Found relevant data, analyzing...',
     messageId: `${taskId}-msg-1`,
@@ -739,7 +739,7 @@ const response = await llm.complete(messages, { tools });
 
 - LLM 作为 stakeholder 不需要关心能力调用的流式输出过程
 - Task Manager 负责处理 LLM 的流式响应
-- Task Manager 通过 `shell:sendMessageChunk` 逐块向用户推送内容
+- Task Manager 通过 `shell:send` 逐块向用户推送内容
 - 完整消息累积完成后再保存到 Ledger
 
 ## 测试策略
@@ -820,7 +820,7 @@ test('Full flow: task spawn and communication', async () => {
   // 验证注册
   expect(bus.has('task:spawn')).toBe(true);
   expect(bus.has('task:send')).toBe(true);
-  expect(bus.has('shell:sendMessageChunk')).toBe(true);
+  expect(bus.has('shell:send')).toBe(true);
   
   // 测试任务创建
   const spawnResult = await bus.invoke(
@@ -834,7 +834,7 @@ test('Full flow: task spawn and communication', async () => {
   // 测试向用户发送消息
   await bus.invoke(
     taskId,
-    'shell:sendMessageChunk',
+    'shell:send',
     JSON.stringify({
       content: 'Hello user',
       messageId: 'msg-1',
@@ -868,7 +868,7 @@ Agent Bus 提供：
 ✅ **简化设计** 移除柯里化和流式接口  
 ✅ **LLM 集成** 通过自动工具定义生成  
 ✅ **任务间通信** 通过 `task:send` 能力  
-✅ **用户输出** 通过 `shell:sendMessageChunk` 能力
+✅ **用户输出** 通过 `shell:send` 能力
 
 **核心设计变更**：
 

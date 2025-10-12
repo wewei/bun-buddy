@@ -6,7 +6,7 @@
 
 ## 设计原则
 
-1. **双重角色**：Shell 既是能力提供者（`shell:sendMessageChunk`）也是能力消费者（调用其他能力）
+1. **双重角色**：Shell 既是能力提供者（`shell:send`）也是能力消费者（调用其他能力）
 2. **薄层**：Shell 只将 HTTP 请求转换为总线调用，并维护 SSE 连接
 3. **无状态核心**：除 SSE 连接外，Shell 不维护业务状态
 4. **流式优先**：设计用于通过 SSE 进行实时流式响应
@@ -184,7 +184,7 @@ GET /inspection/abilities          # 列出所有能力
 
 ## Shell 注册的能力
 
-### shell:sendMessageChunk - 向用户发送消息片段
+### shell:send - 向用户发送消息片段
 
 **描述**：接收来自任务的消息片段，并通过 SSE 连接推送给用户。这是任务向用户输出的主要机制。
 
@@ -230,12 +230,12 @@ GET /inspection/abilities          # 列出所有能力
 
 **实现**：
 ```typescript
-// 注册 shell:sendMessageChunk 能力
+// 注册 shell:send 能力
 bus.register(
   {
-    id: 'shell:sendMessageChunk',
+    id: 'shell:send',
     moduleName: 'shell',
-    abilityName: 'sendMessageChunk',
+    abilityName: 'send',
     description: '向用户发送消息片段',
     inputSchema: {
       type: 'object',
@@ -314,7 +314,7 @@ bus.register(
 for await (const chunk of llmStream) {
   await bus.invoke(
     taskId,
-    'shell:sendMessageChunk',
+    'shell:send',
     JSON.stringify({
       content: chunk.content,
       messageId: currentMessageId,
@@ -326,7 +326,7 @@ for await (const chunk of llmStream) {
 // 发送最后一个片段，标记消息结束
 await bus.invoke(
   taskId,
-  'shell:sendMessageChunk',
+  'shell:send',
   JSON.stringify({
     content: '',
     messageId: currentMessageId,
@@ -523,7 +523,7 @@ type Shell = {
 type CreateShell = (bus: AgentBus) => Shell;
 
 const createShell = (bus: AgentBus): Shell => {
-  // 注册 shell:sendMessageChunk 能力
+  // 注册 shell:send 能力
   registerShellAbilities(bus);
   
   return {
@@ -548,7 +548,7 @@ await shell.start(3000);
 ### 总线依赖
 
 **Shell 提供的能力**：
-- `shell:sendMessageChunk` - 接收任务的消息片段并推送给用户
+- `shell:send` - 接收任务的消息片段并推送给用户
 
 **Shell 依赖的能力**：
 
@@ -578,8 +578,8 @@ const verifyDependencies = async (bus: AgentBus): Promise<void> => {
   }
   
   // 验证 Shell 自己的能力已注册
-  if (!bus.has('shell:sendMessageChunk')) {
-    throw new Error('Shell ability not registered: shell:sendMessageChunk');
+  if (!bus.has('shell:send')) {
+    throw new Error('Shell ability not registered: shell:send');
   }
 };
 ```
@@ -758,7 +758,7 @@ Shell 模块提供：
 
 ✅ **简单的 HTTP API** 用于消息发送和 SSE 流式传输  
 ✅ **双重角色** - 既是能力提供者也是消费者  
-✅ **shell:sendMessageChunk 能力** - 任务向用户推送消息的接口  
+✅ **shell:send 能力** - 任务向用户推送消息的接口  
 ✅ **SSE 连接管理** - 维护活动连接和消息缓冲  
 ✅ **简化调用协议** - 使用 `invoke(callerId, abilityId, input)`  
 ✅ **保留的检查端点** 用于监控  
@@ -766,9 +766,9 @@ Shell 模块提供：
 
 **核心变更**：
 
-- Shell 现在在总线上注册 `shell:sendMessageChunk` 能力
+- Shell 现在在总线上注册 `shell:send` 能力
 - 所有总线调用都携带 `callerId` 参数
-- 移除 `task:stream` 依赖，改为通过 `shell:sendMessageChunk` 接收推送
+- 移除 `task:stream` 依赖，改为通过 `shell:send` 接收推送
 - 消息片段化协议支持流式传输
 
 Shell 有意保持最小化，将所有业务逻辑委托给 Agent Bus 和底层模块。

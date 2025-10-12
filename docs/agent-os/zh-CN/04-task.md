@@ -4,7 +4,7 @@
 
 **Task Manager** 是 Agent OS 的进程管理层。它管理任务的生命周期——从创建到执行再到完成——采用**持久化优先的架构**。与传统的内存执行模型不同，任务执行的每个方面（任务、能力调用、消息）都持续持久化到 Ledger，实现从意外故障中完全恢复。
 
-Task Manager 在 **Agent Bus** 上注册能力：它既调用总线能力（例如 `model:llm`、`ldg:task:save`、`shell:sendMessageChunk`），又注册自己的生命周期管理和任务间通信能力（例如 `task:spawn`、`task:send`、`task:cancel`）。
+Task Manager 在 **Agent Bus** 上注册能力：它既调用总线能力（例如 `model:llm`、`ldg:task:save`、`shell:send`），又注册自己的生命周期管理和任务间通信能力（例如 `task:spawn`、`task:send`、`task:cancel`）。
 
 ### 关键设计原则
 
@@ -413,7 +413,7 @@ console.log(`${tasks.length} active tasks`);
                     ▼
 ┌─────────────────────────────────────────────────┐
 │ 3. 处理 LLM 响应                                  │
-│    - 逐块调用 shell:sendMessageChunk 向用户推送  │
+│    - 逐块调用 shell:send 向用户推送              │
 │    - 累积完整消息内容                             │
 │    - 收集工具调用                                │
 │    - 将完整助手消息保存到 Ledger                  │
