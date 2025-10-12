@@ -26,8 +26,8 @@ Agent OS 是使用**操作系统总线架构**对 Agent 系统的完全重写。
 │shell:send  │  │task:spawn   │  │model:llm │  │ldg:task:*│  │mem:      │  │bus:list │
 │            │  │task:send    │  │model:    │  │ldg:call:*│  │ retrieve │  │bus:     │
 │            │  │task:cancel  │  │ embed    │  │ldg:msg:* │  │mem:graph │  │ schema  │
-│            │  │task:route   │  │model:list│  │          │  │mem:      │  │bus:     │
-│            │  │task:active  │  │          │  │          │  │ archive  │  │ inspect │
+│            │  │task:active  │  │model:list│  │          │  │mem:      │  │bus:     │
+│            │  │             │  │          │  │          │  │ archive  │  │ inspect │
 └────────────┘  └─────────────┘  └──────────┘  └──────────┘  └──────────┘  └─────────┘
       ▲ 所有模块都在总线上注册能力并调用其他能力
 ```
