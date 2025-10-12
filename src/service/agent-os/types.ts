@@ -66,21 +66,33 @@ export type InvokeResult<R, E> =
   | { type: 'unknown-failure'; message: string }
   | AbilityResult<R, E>;
 
-export type AbilityHandler = (taskId: string, input: string) => Promise<AbilityResult<string, string>>;
+// Generic handler: receives parsed input of type TInput, returns TOutput
+export type AbilityHandler<TInput = unknown, TOutput = unknown> = (
+  taskId: string,
+  input: TInput
+) => Promise<AbilityResult<TOutput, string>>;
 
-export type AbilityMeta = {
+// Internal handler: used by Bus internally, deals with strings
+// Can return invalid-input for parse errors
+export type InternalAbilityHandler = (
+  taskId: string,
+  input: string
+) => Promise<InvokeResult<string, string>>;
+
+// Generic meta: carries type information via schemas
+export type AbilityMeta<TInput = unknown, TOutput = unknown> = {
   id: string; // e.g., 'task:spawn'
   moduleName: string; // e.g., 'task'
   abilityName: string; // e.g., 'spawn'
   description: string;
-  inputSchema: z.ZodSchema;
-  outputSchema: z.ZodSchema;
+  inputSchema: z.ZodSchema<TInput>;
+  outputSchema: z.ZodSchema<TOutput>;
   tags?: string[];
 };
 
 export type RegisteredAbility = {
-  meta: AbilityMeta;
-  handler: AbilityHandler;
+  meta: AbilityMeta<unknown, unknown>;
+  handler: InternalAbilityHandler;
 };
 
 // ============================================================================
@@ -89,7 +101,10 @@ export type RegisteredAbility = {
 
 export type AgentBus = {
   invoke: (abilityId: string, callerId: string, input: string) => Promise<InvokeResult<string, string>>;
-  register: (meta: AbilityMeta, handler: AbilityHandler) => void;
+  register: <TInput, TOutput>(
+    meta: AbilityMeta<TInput, TOutput>,
+    handler: AbilityHandler<TInput, TOutput>
+  ) => void;
   unregister: (abilityId: string) => void;
   has: (abilityId: string) => boolean;
 };

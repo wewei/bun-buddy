@@ -4,7 +4,7 @@ import { z } from 'zod';
 
 import { sendSSEEvent } from './sse';
 
-import type { AgentBus, AbilityMeta, AbilityResult } from '../types';
+import type { AgentBus, AbilityMeta } from '../types';
 
 // Schema definitions
 const SHELL_SEND_INPUT_SCHEMA = z.object({
@@ -19,7 +19,10 @@ const SHELL_SEND_OUTPUT_SCHEMA = z.object({
 });
 
 // Meta definitions
-const SHELL_SEND_META: AbilityMeta = {
+const SHELL_SEND_META: AbilityMeta<
+  z.infer<typeof SHELL_SEND_INPUT_SCHEMA>,
+  z.infer<typeof SHELL_SEND_OUTPUT_SCHEMA>
+> = {
   id: 'shell:send',
   moduleName: 'shell',
   abilityName: 'send',
@@ -28,46 +31,39 @@ const SHELL_SEND_META: AbilityMeta = {
   outputSchema: SHELL_SEND_OUTPUT_SCHEMA,
 };
 
-const handleShellSend = async (taskId: string, input: string): Promise<AbilityResult<string, string>> => {
-  try {
-    const { content, messageId, index } = SHELL_SEND_INPUT_SCHEMA.parse(JSON.parse(input));
+type ShellSendInput = z.infer<typeof SHELL_SEND_INPUT_SCHEMA>;
 
-    const success = sendSSEEvent(taskId, {
-      type: 'content',
-      taskId,
-      content,
-      messageId,
-      index,
-    });
+const handleShellSend = async (taskId: string, input: ShellSendInput) => {
+  const success = sendSSEEvent(taskId, {
+    type: 'content',
+    taskId,
+    content: input.content,
+    messageId: input.messageId,
+    index: input.index,
+  });
 
-    if (!success) {
-      return {
-        type: 'success',
-        result: JSON.stringify({
-          success: false,
-          error: `No active SSE connection for task ${taskId}`,
-        })
-      };
-    }
-
-    if (index < 0) {
-      sendSSEEvent(taskId, {
-        type: 'message_complete',
-        taskId,
-        messageId,
-      });
-    }
-
+  if (!success) {
     return {
-      type: 'success',
-      result: JSON.stringify({ success: true })
-    };
-  } catch (error) {
-    return {
-      type: 'error',
-      error: error instanceof Error ? error.message : String(error)
+      type: 'success' as const,
+      result: {
+        success: false,
+        error: `No active SSE connection for task ${taskId}`,
+      }
     };
   }
+
+  if (input.index < 0) {
+    sendSSEEvent(taskId, {
+      type: 'message_complete',
+      taskId,
+      messageId: input.messageId,
+    });
+  }
+
+  return {
+    type: 'success' as const,
+    result: { success: true }
+  };
 };
 
 export const registerShellAbilities = (bus: AgentBus): void => {

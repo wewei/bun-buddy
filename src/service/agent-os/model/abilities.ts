@@ -31,9 +31,9 @@ const MODEL_LLM_OUTPUT_SCHEMA = z.object({
   content: z.string(),
   toolCalls: z.array(z.any()).optional(),
   usage: z.object({
-    promptTokens: z.number(),
-    completionTokens: z.number(),
-    totalTokens: z.number(),
+    promptTokens: z.number().optional(),
+    completionTokens: z.number().optional(),
+    totalTokens: z.number().optional(),
   }).optional(),
 });
 
@@ -57,7 +57,16 @@ const MODEL_LIST_EMBED_OUTPUT_SCHEMA = z.object({
   total: z.number(),
 });
 
-const MODEL_LLM_META: AbilityMeta = {
+// Type inference from schemas
+type ModelLLMInput = z.infer<typeof MODEL_LLM_INPUT_SCHEMA>;
+type ModelLLMOutput = z.infer<typeof MODEL_LLM_OUTPUT_SCHEMA>;
+type ModelListLLMInput = z.infer<typeof MODEL_LIST_LLM_INPUT_SCHEMA>;
+type ModelListLLMOutput = z.infer<typeof MODEL_LIST_LLM_OUTPUT_SCHEMA>;
+type ModelListEmbedInput = z.infer<typeof MODEL_LIST_EMBED_INPUT_SCHEMA>;
+type ModelListEmbedOutput = z.infer<typeof MODEL_LIST_EMBED_OUTPUT_SCHEMA>;
+
+// Meta definitions
+const MODEL_LLM_META: AbilityMeta<ModelLLMInput, ModelLLMOutput> = {
   id: 'model:llm',
   moduleName: 'model',
   abilityName: 'llm',
@@ -66,7 +75,7 @@ const MODEL_LLM_META: AbilityMeta = {
   outputSchema: MODEL_LLM_OUTPUT_SCHEMA,
 };
 
-const MODEL_LIST_LLM_META: AbilityMeta = {
+const MODEL_LIST_LLM_META: AbilityMeta<ModelListLLMInput, ModelListLLMOutput> = {
   id: 'model:listLLM',
   moduleName: 'model',
   abilityName: 'listLLM',
@@ -75,7 +84,7 @@ const MODEL_LIST_LLM_META: AbilityMeta = {
   outputSchema: MODEL_LIST_LLM_OUTPUT_SCHEMA,
 };
 
-const MODEL_LIST_EMBED_META: AbilityMeta = {
+const MODEL_LIST_EMBED_META: AbilityMeta<ModelListEmbedInput, ModelListEmbedOutput> = {
   id: 'model:listEmbed',
   moduleName: 'model',
   abilityName: 'listEmbed',
@@ -157,52 +166,31 @@ const handleStreamCompletion = async (
 
 const handleLLMInvoke = async (
   taskId: string,
-  input: string,
+  input: ModelLLMInput,
   registry: ProviderRegistry,
   adapters: Map<string, ProviderAdapter>,
   bus: AgentBus
-): Promise<AbilityResult<string, string>> => {
-  try {
-    const parsed = MODEL_LLM_INPUT_SCHEMA.parse(JSON.parse(input));
-    const {
-      messages,
-      provider,
-      model,
-      temperature,
-      maxTokens,
-      topP,
-      streamToUser,
-      tools,
-    } = parsed;
+): Promise<AbilityResult<ModelLLMOutput, string>> => {
+  const validation = validateProviderAndModel(input.provider, input.model, registry, adapters);
+  if (!validation.success) {
+    return { type: 'error', error: validation.error };
+  }
 
-    const validation = validateProviderAndModel(provider, model, registry, adapters);
-    if (!validation.success) {
-      return { type: 'error', error: validation.error };
-    }
+  const { config, adapter } = validation;
 
-    const { config, adapter } = validation;
+  const options: CompletionOptions = {
+    tools: input.tools,
+    temperature: input.temperature,
+    maxTokens: input.maxTokens,
+    topP: input.topP,
+  };
 
-    const options: CompletionOptions = {
-      tools,
-      temperature,
-      maxTokens,
-      topP,
-    };
-
-    let result: string;
-    if (streamToUser) {
-      result = await handleStreamCompletion(taskId, adapter, config, model, messages, options, bus);
-    } else {
-      const completionResult = await adapter.completeNonStream(config, model, messages, options);
-      result = JSON.stringify(completionResult);
-    }
-
+  if (input.streamToUser) {
+    const result = await handleStreamCompletion(taskId, adapter, config, input.model, input.messages, options, bus);
+    return { type: 'success', result: JSON.parse(result) };
+  } else {
+    const result = await adapter.completeNonStream(config, input.model, input.messages, options);
     return { type: 'success', result };
-  } catch (error) {
-    return {
-      type: 'error',
-      error: error instanceof Error ? error.message : String(error)
-    };
   }
 };
 
@@ -211,73 +199,59 @@ const registerLLMAbility = (
   adapters: Map<string, ProviderAdapter>,
   bus: AgentBus
 ): void => {
-  bus.register(MODEL_LLM_META, async (taskId: string, input: string) =>
+  bus.register(MODEL_LLM_META, async (taskId, input) =>
     handleLLMInvoke(taskId, input, registry, adapters, bus)
   );
 };
 
 const handleListLLMInvoke = async (
   _taskId: string,
-  _input: string,
+  _input: ModelListLLMInput,
   registry: ProviderRegistry
-): Promise<AbilityResult<string, string>> => {
-  try {
-    const providers = Array.from(registry.entries())
-      .map(([providerName, config]) => ({
-        providerName,
-        models: config.models
-          .filter((m) => m.type === 'llm')
-          .map((m) => m.name),
-      }))
-      .filter((p) => p.models.length > 0);
+): Promise<AbilityResult<ModelListLLMOutput, string>> => {
+  const providers = Array.from(registry.entries())
+    .map(([providerName, config]) => ({
+      providerName,
+      models: config.models
+        .filter((m) => m.type === 'llm')
+        .map((m) => m.name),
+    }))
+    .filter((p) => p.models.length > 0);
 
-    return {
-      type: 'success',
-      result: JSON.stringify({ providers, total: providers.length })
-    };
-  } catch (error) {
-    return {
-      type: 'error',
-      error: error instanceof Error ? error.message : String(error)
-    };
-  }
+  return {
+    type: 'success',
+    result: { providers, total: providers.length }
+  };
 };
 
 const registerListLLMAbility = (registry: ProviderRegistry, bus: AgentBus): void => {
-  bus.register(MODEL_LIST_LLM_META, async (taskId: string, input: string) =>
+  bus.register(MODEL_LIST_LLM_META, async (taskId, input) =>
     handleListLLMInvoke(taskId, input, registry)
   );
 };
 
 const handleListEmbedInvoke = async (
   _taskId: string,
-  _input: string,
+  _input: ModelListEmbedInput,
   registry: ProviderRegistry
-): Promise<AbilityResult<string, string>> => {
-  try {
-    const providers = Array.from(registry.entries())
-      .map(([providerName, config]) => ({
-        providerName,
-        models: config.models
-          .filter((m) => m.type === 'embed')
-          .map((m) => m.name),
-      }))
-      .filter((p) => p.models.length > 0);
+): Promise<AbilityResult<ModelListEmbedOutput, string>> => {
+  const providers = Array.from(registry.entries())
+    .map(([providerName, config]) => ({
+      providerName,
+      models: config.models
+        .filter((m) => m.type === 'embed')
+        .map((m) => m.name),
+    }))
+    .filter((p) => p.models.length > 0);
 
-    return {
-      type: 'success',
-      result: JSON.stringify({ providers, total: providers.length })
-    };
-  } catch (error) {
-    return {
-      type: 'error',
-      error: error instanceof Error ? error.message : String(error)
-    };
-  }
+  return {
+    type: 'success',
+    result: { providers, total: providers.length }
+  };
 };
 
 const registerListEmbedAbility = (registry: ProviderRegistry, bus: AgentBus): void => {
-  bus.register(MODEL_LIST_EMBED_META, async (taskId: string, input: string) =>
+  bus.register(MODEL_LIST_EMBED_META, async (taskId, input) =>
     handleListEmbedInvoke(taskId, input, registry)
   );
 };

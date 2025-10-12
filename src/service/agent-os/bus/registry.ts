@@ -1,17 +1,66 @@
 // Ability Registry
 
-import type { AbilityMeta, AbilityHandler, RegisteredAbility } from '../types';
+import type { AbilityMeta, AbilityHandler, RegisteredAbility, InternalAbilityHandler, InvokeResult } from '../types';
 import type { BusState } from './types';
 
-export const registerAbility = (
+const createInternalHandler = <TInput, TOutput>(
+  meta: AbilityMeta<TInput, TOutput>,
+  handler: AbilityHandler<TInput, TOutput>
+): InternalAbilityHandler => {
+  return async (taskId: string, input: string): Promise<InvokeResult<string, string>> => {
+    try {
+      // Parse JSON
+      let jsonData: unknown;
+      try {
+        jsonData = JSON.parse(input);
+      } catch (error) {
+        return {
+          type: 'invalid-input',
+          message: `Invalid JSON: ${error instanceof Error ? error.message : String(error)}`
+        };
+      }
+      
+      // Validate with Zod schema
+      const parseResult = meta.inputSchema.safeParse(jsonData);
+      if (!parseResult.success) {
+        return {
+          type: 'invalid-input',
+          message: `Schema validation failed: ${parseResult.error.message}`
+        };
+      }
+      
+      // Call handler with parsed, typed input
+      const handlerResult = await handler(taskId, parseResult.data);
+      
+      // Serialize result
+      if (handlerResult.type === 'success') {
+        return {
+          type: 'success',
+          result: JSON.stringify(handlerResult.result)
+        };
+      } else {
+        return handlerResult;
+      }
+    } catch (error) {
+      return {
+        type: 'error',
+        error: error instanceof Error ? error.message : String(error)
+      };
+    }
+  };
+};
+
+export const registerAbility = <TInput, TOutput>(
   state: BusState,
-  meta: AbilityMeta,
-  handler: AbilityHandler
+  meta: AbilityMeta<TInput, TOutput>,
+  handler: AbilityHandler<TInput, TOutput>
 ): void => {
   if (state.abilities.has(meta.id)) {
     throw new Error(`Ability already registered: ${meta.id}`);
   }
-  state.abilities.set(meta.id, { meta, handler });
+  
+  const internalHandler = createInternalHandler(meta, handler);
+  state.abilities.set(meta.id, { meta, handler: internalHandler });
 };
 
 export const unregisterAbility = (state: BusState, abilityId: string): void => {
