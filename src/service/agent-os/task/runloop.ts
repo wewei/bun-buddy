@@ -35,10 +35,9 @@ const streamContentToUser = async (
   if (content.length === 0) {
     // Send empty message
     await bus.invoke(
-      taskId,
       'shell:send',
+      taskId,
       JSON.stringify({
-        taskId,
         content: '',
         messageId,
         index: -1,
@@ -57,10 +56,9 @@ const streamContentToUser = async (
   for (let i = 0; i < chunks.length; i++) {
     const isLast = i === chunks.length - 1;
     await bus.invoke(
-      taskId,
       'shell:send',
+      taskId,
       JSON.stringify({
-        taskId,
         content: chunks[i],
         messageId,
         index: isLast ? -1 : i,
@@ -71,7 +69,7 @@ const streamContentToUser = async (
 
 const generateToolsFromBus = async (bus: AgentBus, taskId: string): Promise<ToolDefinition[]> => {
   // Get all modules
-  const modulesResult = await bus.invoke(taskId, 'bus:list', '{}');
+  const modulesResult = await bus.invoke('bus:list', taskId, '{}');
   const { modules } = JSON.parse(modulesResult);
 
   const tools: ToolDefinition[] = [];
@@ -83,16 +81,16 @@ const generateToolsFromBus = async (bus: AgentBus, taskId: string): Promise<Tool
     }
 
     const abilitiesResult = await bus.invoke(
-      taskId,
       'bus:abilities',
+      taskId,
       JSON.stringify({ moduleName: module.name })
     );
     const { abilities } = JSON.parse(abilitiesResult);
 
     for (const ability of abilities) {
       const schemaResult = await bus.invoke(
-        taskId,
         'bus:schema',
+        taskId,
         JSON.stringify({ abilityId: ability.id })
       );
       const { inputSchema } = JSON.parse(schemaResult);
@@ -123,7 +121,7 @@ const executeToolCall = async (
   console.log(`Task ${taskId} - Executing tool: ${abilityId}`);
 
   try {
-    const toolResult = await bus.invoke(taskId, abilityId, args);
+    const toolResult = await bus.invoke(abilityId, taskId, args);
     console.log(`Task ${taskId} - Tool result: ${toolResult.substring(0, 100)}...`);
 
     const toolMessage: Message = {
@@ -134,7 +132,7 @@ const executeToolCall = async (
       timestamp: Date.now(),
     };
 
-    await bus.invoke('system', 'ldg:msg:save', JSON.stringify({ message: toolMessage }));
+    await bus.invoke('ldg:msg:save', 'system', JSON.stringify({ message: toolMessage }));
     messages.push(toolMessage);
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -148,7 +146,7 @@ const executeToolCall = async (
       timestamp: Date.now(),
     };
 
-    await bus.invoke('system', 'ldg:msg:save', JSON.stringify({ message: errorMsg }));
+    await bus.invoke('ldg:msg:save', 'system', JSON.stringify({ message: errorMsg }));
     messages.push(errorMsg);
   }
 };
@@ -179,7 +177,7 @@ const processLLMResponse = async (
     timestamp: Date.now(),
   };
 
-  await bus.invoke('system', 'ldg:msg:save', JSON.stringify({ message: assistantMessage }));
+  await bus.invoke('ldg:msg:save', 'system', JSON.stringify({ message: assistantMessage }));
   messages.push(assistantMessage);
 
   if (toolCalls && toolCalls.length > 0) {
@@ -195,7 +193,7 @@ const processLLMResponse = async (
 const completeTask = async (taskId: string, taskState: TaskState, bus: AgentBus): Promise<void> => {
   taskState.task.completionStatus = 'success';
   taskState.task.updatedAt = Date.now();
-  await bus.invoke('system', 'ldg:task:save', JSON.stringify({ task: taskState.task }));
+  await bus.invoke('ldg:task:save', 'system', JSON.stringify({ task: taskState.task }));
   console.log(`Task ${taskId} completed successfully`);
 };
 
@@ -211,8 +209,37 @@ const failTask = async (
   taskState.task.completionStatus = `failed: ${errorMessage}`;
   taskState.task.updatedAt = Date.now();
 
-  await bus.invoke('system', 'ldg:task:save', JSON.stringify({ task: taskState.task }));
+  await bus.invoke('ldg:task:save', 'system', JSON.stringify({ task: taskState.task }));
   await streamContentToUser(taskId, `Error: ${errorMessage}`, bus);
+};
+
+const getDefaultLLMProvider = async (
+  bus: AgentBus,
+  taskId: string
+): Promise<{ provider: string; model: string }> => {
+  const result = await bus.invoke('model:listLLM', taskId, '{}');
+  const { providers } = JSON.parse(result) as {
+    providers: Array<{ providerName: string; models: string[] }>;
+  };
+
+  if (!providers || providers.length === 0) {
+    throw new Error('No LLM providers available');
+  }
+
+  const firstProvider = providers[0];
+  if (!firstProvider || !firstProvider.models || firstProvider.models.length === 0) {
+    throw new Error('No LLM models available');
+  }
+
+  const firstModel = firstProvider.models[0];
+  if (!firstModel) {
+    throw new Error('No LLM model found');
+  }
+
+  return {
+    provider: firstProvider.providerName,
+    model: firstModel,
+  };
 };
 
 const runExecutionLoop = async (
@@ -221,15 +248,21 @@ const runExecutionLoop = async (
   tools: ToolDefinition[],
   bus: AgentBus
 ): Promise<void> => {
+  // Get default LLM provider and model
+  const { provider, model } = await getDefaultLLMProvider(bus, taskId);
+
   let continueLoop = true;
 
   while (continueLoop) {
     const llmInput = {
       messages: convertToLLMMessages(messages),
+      provider,
+      model,
+      streamToUser: true, // Enable streaming to user
       tools,
     };
 
-    const llmResult = await bus.invoke(taskId, 'model:llm', JSON.stringify(llmInput));
+    const llmResult = await bus.invoke('model:llm', taskId, JSON.stringify(llmInput));
     continueLoop = await processLLMResponse(taskId, llmResult, messages, bus);
   }
 };

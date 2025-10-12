@@ -29,8 +29,8 @@ const sendToExistingTask = async (
   message: string
 ): Promise<{ success: boolean; taskId: string; error?: string }> => {
   const result = await bus.invoke(
-    'shell',
     'task:send',
+    'shell',
     JSON.stringify({
       receiverId: taskId,
       message,
@@ -47,8 +47,8 @@ const sendToExistingTask = async (
 
 const createNewTask = async (bus: AgentBus, message: string): Promise<string> => {
   const result = await bus.invoke(
-    'shell',
     'task:spawn',
+    'shell',
     JSON.stringify({
       goal: message,
     })

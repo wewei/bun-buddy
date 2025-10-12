@@ -1,26 +1,20 @@
 // Model Manager types
 
-export type ModelType = 'llm' | 'embedding';
+export type ModelType = 'llm' | 'embed';
 
-export type ModelProvider = 'openai' | 'anthropic' | 'custom';
+export type AdapterType = 'openai' | 'anthropic' | 'custom';
 
-export type ModelInstance = {
-  id: string; // e.g., 'gpt4'
-  type: ModelType;
-  provider: ModelProvider;
-  endpoint: string;
-  model: string; // e.g., 'gpt-4-turbo'
-  apiKey?: string; // optional, can use environment variable
-  temperature?: number;
-  maxTokens?: number;
-  topP?: number;
+export type ProviderConfig = {
+  endpoint: string; // API endpoint URL
+  apiKey: string;
+  adapterType: AdapterType;
+  models: Array<{
+    type: ModelType;
+    name: string;
+  }>;
 };
 
-export type ModelRegistry = {
-  instances: Map<string, ModelInstance>;
-  defaultLLM?: string;
-  defaultEmbedding?: string;
-};
+export type ProviderRegistry = Map<string, ProviderConfig>; // key = provider name
 
 export type ChatMessage = {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -64,6 +58,7 @@ export type CompletionOptions = {
   tools?: ToolDefinition[];
   temperature?: number;
   maxTokens?: number;
+  topP?: number;
 };
 
 export type EmbeddingResult = {
@@ -72,13 +67,31 @@ export type EmbeddingResult = {
   usage: TokenUsage;
 };
 
+export type CompletionResult = {
+  content: string;
+  toolCalls?: ToolCall[];
+  usage?: TokenUsage;
+};
+
 export type ProviderAdapter = {
-  complete: (
-    instance: ModelInstance,
+  completeStream: (
+    config: ProviderConfig,
+    model: string,
     messages: ChatMessage[],
     options?: CompletionOptions
   ) => AsyncGenerator<CompletionChunk>;
 
-  embed: (instance: ModelInstance, text: string) => Promise<EmbeddingResult>;
+  completeNonStream: (
+    config: ProviderConfig,
+    model: string,
+    messages: ChatMessage[],
+    options?: CompletionOptions
+  ) => Promise<CompletionResult>;
+
+  embed: (
+    config: ProviderConfig,
+    model: string,
+    text: string
+  ) => Promise<EmbeddingResult>;
 };
 

@@ -12,10 +12,6 @@ const sendMeta: AbilityMeta = {
   inputSchema: {
     type: 'object',
     properties: {
-      taskId: {
-        type: 'string',
-        description: 'Task ID (used to find the SSE connection)',
-      },
       content: {
         type: 'string',
         description: 'Message content chunk',
@@ -29,7 +25,7 @@ const sendMeta: AbilityMeta = {
         description: 'Chunk index. >= 0 means more chunks coming, < 0 means message end',
       },
     },
-    required: ['taskId', 'content', 'messageId', 'index'],
+    required: ['content', 'messageId', 'index'],
   },
   outputSchema: {
     type: 'object',
@@ -47,8 +43,8 @@ const sendMeta: AbilityMeta = {
   },
 };
 
-const handleShellSend = async (input: string): Promise<string> => {
-  const { taskId, content, messageId, index } = JSON.parse(input);
+const handleShellSend = async (taskId: string, input: string): Promise<string> => {
+  const { content, messageId, index } = JSON.parse(input);
 
   const success = sendSSEEvent(taskId, {
     type: 'content',

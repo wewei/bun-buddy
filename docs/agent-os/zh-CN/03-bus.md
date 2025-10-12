@@ -61,7 +61,9 @@
 
 ```typescript
 // 能力处理器签名
-type AbilityHandler = (input: string) => Promise<string>;
+// taskId: 调用方任务 ID，用于追踪和上下文传递
+// input: JSON 编码的参数
+type AbilityHandler = (taskId: string, input: string) => Promise<string>;
 
 // 能力元数据
 type AbilityMeta = {
@@ -83,10 +85,10 @@ type RegisteredAbility = {
 // Agent Bus 公共接口
 type AgentBus = {
   // 调用能力
-  // callerId: 调用方任务 ID，用于追踪和审计
   // abilityId: 能力标识符（如 'task:spawn'）
+  // callerId: 调用方任务 ID，用于追踪和审计
   // input: JSON 编码的参数
-  invoke: (callerId: string, abilityId: string, input: string) => Promise<string>;
+  invoke: (abilityId: string, callerId: string, input: string) => Promise<string>;
   
   // 注册新能力
   register: (meta: AbilityMeta, handler: AbilityHandler) => void;

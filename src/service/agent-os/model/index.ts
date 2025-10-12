@@ -4,16 +4,22 @@ import { registerModelAbilities } from './abilities';
 import { createOpenAIAdapter } from './providers/openai';
 
 import type { AgentBus } from '../types';
-import type { ModelRegistry, ProviderAdapter, ModelInstance } from './types';
+import type { ProviderRegistry, ProviderAdapter, ProviderConfig, AdapterType } from './types';
 
 export type ModelManagerConfig = {
-  models: ModelInstance[];
-  defaultLLM?: string;
-  defaultEmbedding?: string;
+  providers: Record<
+    string,
+    {
+      endpoint: string;
+      apiKey: string;
+      adapterType: AdapterType;
+      models: Array<{ type: 'llm' | 'embed'; name: string }>;
+    }
+  >;
 };
 
 export type ModelManager = {
-  registry: ModelRegistry;
+  registry: ProviderRegistry;
   adapters: Map<string, ProviderAdapter>;
 };
 
@@ -26,14 +32,28 @@ const createAdapterRegistry = (): Map<string, ProviderAdapter> => {
   return registry;
 };
 
-export const createModelManager = (bus: AgentBus): ModelManager => {
+export const createModelManager = (
+  config: ModelManagerConfig,
+  bus: AgentBus
+): ModelManager => {
+  const registry: ProviderRegistry = new Map();
+
+  // Build provider registry from config
+  for (const [providerName, providerConfig] of Object.entries(config.providers)) {
+    const config: ProviderConfig = {
+      endpoint: providerConfig.endpoint,
+      apiKey: providerConfig.apiKey,
+      adapterType: providerConfig.adapterType,
+      models: providerConfig.models,
+    };
+    registry.set(providerName, config);
+  }
+
+  const adapters = createAdapterRegistry();
+
   const manager: ModelManager = {
-    registry: {
-      instances: new Map(),
-      defaultLLM: undefined,
-      defaultEmbedding: undefined,
-    },
-    adapters: createAdapterRegistry(),
+    registry,
+    adapters,
   };
 
   // Register model abilities
@@ -42,26 +62,4 @@ export const createModelManager = (bus: AgentBus): ModelManager => {
   return manager;
 };
 
-export const initializeModelManager = async (
-  config: ModelManagerConfig,
-  bus: AgentBus
-): Promise<ModelManager> => {
-  const manager = createModelManager(bus);
-
-  // Register model instances
-  for (const model of config.models) {
-    await bus.invoke(
-      'system',
-      'model:register',
-      JSON.stringify({
-        ...model,
-        setAsDefault: model.id === config.defaultLLM || model.id === config.defaultEmbedding,
-      })
-    );
-  }
-
-  return manager;
-};
-
-export type { ModelInstance, ChatMessage, ToolCall, ToolDefinition } from './types';
-
+export type { ChatMessage, ToolCall, ToolDefinition } from './types';

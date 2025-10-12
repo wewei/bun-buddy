@@ -5,18 +5,19 @@ import { createAgentOS, type AgentOSConfig } from './index';
 const config: AgentOSConfig = {
   port: 3000,
   models: {
-    models: [
-      {
-        id: 'gpt4',
-        type: 'llm',
-        provider: 'openai',
+    providers: {
+      'openai-main': {
         endpoint: 'https://api.openai.com/v1',
-        model: 'gpt-4-turbo-preview',
-        temperature: 0.7,
-        maxTokens: 4096,
+        apiKey: process.env.OPENAI_API_KEY || '',
+        adapterType: 'openai',
+        models: [
+          { type: 'llm', name: 'gpt-4-turbo-preview' },
+          { type: 'llm', name: 'gpt-3.5-turbo' },
+          { type: 'embed', name: 'text-embedding-3-small' },
+          { type: 'embed', name: 'text-embedding-3-large' },
+        ],
       },
-    ],
-    defaultLLM: 'gpt4',
+    },
   },
 };
 

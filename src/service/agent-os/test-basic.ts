@@ -10,17 +10,17 @@ const testBasicFunctionality = async () => {
   const agentOS = await createAgentOS({
     port: 3001, // Use different port for testing
     models: {
-      models: [
-        {
-          id: 'gpt4-test',
-          type: 'llm',
-          provider: 'openai',
+      providers: {
+        'openai-test': {
           endpoint: 'https://api.openai.com/v1',
-          model: 'gpt-4-turbo-preview',
-          temperature: 0.7,
+          apiKey: process.env.OPENAI_API_KEY || '',
+          adapterType: 'openai',
+          models: [
+            { type: 'llm', name: 'gpt-4-turbo-preview' },
+            { type: 'embed', name: 'text-embedding-3-small' },
+          ],
         },
-      ],
-      defaultLLM: 'gpt4-test',
+      },
     },
   });
 
@@ -28,23 +28,26 @@ const testBasicFunctionality = async () => {
 
   // Test Bus abilities
   console.log('2. Testing Bus abilities...');
-  const modules = await agentOS.bus.invoke('test', 'bus:list', '{}');
+  const modules = await agentOS.bus.invoke('bus:list', 'test', '{}');
   const modulesData = JSON.parse(modules) as { modules: Array<{ name: string }> };
   console.log('✓ Modules:', modulesData.modules.map((m) => m.name).join(', '));
 
   // Test Model Manager
   console.log('\n3. Testing Model Manager...');
-  const models = await agentOS.bus.invoke('test', 'model:list', '{}');
+  const models = await agentOS.bus.invoke('model:listLLM', 'test', '{}');
   const modelsData = JSON.parse(models) as {
-    models: Array<{ id: string; provider: string }>;
+    providers: Array<{ providerName: string; models: string[] }>;
   };
-  console.log('✓ Models:', modelsData.models.map((m) => `${m.id} (${m.provider})`).join(', '));
+  console.log(
+    '✓ LLM Providers:',
+    modelsData.providers.map((p) => `${p.providerName}: ${p.models.join(', ')}`).join(' | ')
+  );
 
   // Test Task Manager
   console.log('\n4. Testing Task Manager...');
   const spawnResult = await agentOS.bus.invoke(
-    'test',
     'task:spawn',
+    'test',
     JSON.stringify({
       goal: 'Test task - say hello',
     })
@@ -56,7 +59,7 @@ const testBasicFunctionality = async () => {
   await new Promise((resolve) => setTimeout(resolve, 1000));
 
   // Check active tasks
-  const activeTasks = await agentOS.bus.invoke('test', 'task:active', '{}');
+  const activeTasks = await agentOS.bus.invoke('task:active', 'test', '{}');
   const activeData = JSON.parse(activeTasks);
   console.log('✓ Active tasks:', activeData.tasks.length);
 

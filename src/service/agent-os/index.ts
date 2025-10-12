@@ -3,7 +3,7 @@
 import { createAgentBus, type AgentBus } from './bus';
 import { createMockLedger, registerLedgerAbilities, type Ledger } from './ledger';
 import {
-  initializeModelManager,
+  createModelManager,
   type ModelManager,
   type ModelManagerConfig,
 } from './model';
@@ -34,7 +34,8 @@ const verifyDependencies = (bus: AgentBus): void => {
     'ldg:msg:list',
     // Model abilities
     'model:llm',
-    'model:register',
+    'model:listLLM',
+    'model:listEmbed',
     // Task abilities
     'task:spawn',
     'task:send',
@@ -65,9 +66,9 @@ export const createAgentOS = async (config: AgentOSConfig): Promise<AgentOS> => 
   const ledger = createMockLedger();
   registerLedgerAbilities(ledger, bus);
 
-  // 3. Create and initialize Model Manager
+  // 3. Create Model Manager
   console.log('- Creating Model Manager...');
-  const modelManager = await initializeModelManager(config.models, bus);
+  const modelManager = createModelManager(config.models, bus);
 
   // 4. Create Shell
   console.log('- Creating Shell...');
@@ -110,7 +111,7 @@ export const createAgentOS = async (config: AgentOSConfig): Promise<AgentOS> => 
 // Export types
 export type { AgentBus } from './bus';
 export type { Ledger } from './ledger';
-export type { ModelManager, ModelInstance, ModelManagerConfig } from './model';
+export type { ModelManager, ModelManagerConfig } from './model';
 export type { TaskManager } from './task';
 export type { Shell } from './shell';
 export type { Task, Call, Message, MessageRole, CallStatus } from './types';

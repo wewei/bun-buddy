@@ -30,13 +30,13 @@ const wrapHandler = (
   handler: AbilityHandler,
   meta: AbilityMeta
 ): AbilityHandler => {
-  return async (input: string) => {
+  return async (taskId: string, input: string) => {
     try {
       // Validate input against schema
       validateInput(input, meta.inputSchema);
       
       // Execute handler
-      const result = await handler(input);
+      const result = await handler(taskId, input);
       
       return result;
     } catch (error) {
@@ -53,7 +53,7 @@ export const createAgentBus = (): AgentBus => {
   };
 
   const bus: AgentBus = {
-    invoke: async (callerId: string, abilityId: string, input: string): Promise<string> => {
+    invoke: async (abilityId: string, callerId: string, input: string): Promise<string> => {
       const startTime = Date.now();
       const logEntry: CallLogEntry = {
         callerId,
@@ -67,7 +67,7 @@ export const createAgentBus = (): AgentBus => {
           throw new Error(`Ability not found: ${abilityId}`);
         }
 
-        const result = await ability.handler(input);
+        const result = await ability.handler(callerId, input);
 
         logEntry.duration = Date.now() - startTime;
         logEntry.success = true;

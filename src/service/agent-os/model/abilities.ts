@@ -1,8 +1,19 @@
 // Model Manager Abilities
 
 import type { AgentBus, AbilityMeta } from '../types';
-import type { ModelRegistry, ChatMessage, CompletionOptions, ToolCall } from './types';
-import type { ProviderAdapter } from './types';
+import type {
+  ProviderRegistry,
+  ProviderConfig,
+  ChatMessage,
+  CompletionOptions,
+  ToolCall,
+  ToolDefinition,
+  ProviderAdapter,
+} from './types';
+
+// ============================================================================
+// model:llm - LLM completion ability
+// ============================================================================
 
 const LLM_INPUT_SCHEMA = {
   type: 'object',
@@ -18,25 +29,37 @@ const LLM_INPUT_SCHEMA = {
       },
       description: 'Chat message history',
     },
+    provider: {
+      type: 'string',
+      description: 'Provider name',
+    },
+    model: {
+      type: 'string',
+      description: 'Model name',
+    },
+    temperature: {
+      type: 'number',
+      description: 'Temperature for this completion',
+    },
+    maxTokens: {
+      type: 'number',
+      description: 'Max tokens for this completion',
+    },
+    topP: {
+      type: 'number',
+      description: 'Top P for this completion',
+    },
+    streamToUser: {
+      type: 'boolean',
+      description: 'Whether to stream output to user via shell:send',
+    },
     tools: {
       type: 'array',
       items: { type: 'object' },
       description: 'Optional tool definitions',
     },
-    modelId: {
-      type: 'string',
-      description: 'Optional model instance ID (uses default if omitted)',
-    },
-    temperature: {
-      type: 'number',
-      description: 'Override temperature',
-    },
-    maxTokens: {
-      type: 'number',
-      description: 'Override max tokens',
-    },
   },
-  required: ['messages'],
+  required: ['messages', 'provider', 'model'],
 };
 
 const LLM_OUTPUT_SCHEMA = {
@@ -70,47 +93,70 @@ const createLLMMeta = (): AbilityMeta => ({
 
 type LLMInput = {
   messages: ChatMessage[];
-  tools?: CompletionOptions['tools'];
-  modelId?: string;
+  provider: string;
+  model: string;
   temperature?: number;
   maxTokens?: number;
+  topP?: number;
+  streamToUser?: boolean;
+  tools?: ToolDefinition[];
 };
 
-const handleLLMInvoke = async (
-  input: string,
-  registry: ModelRegistry,
+const generateMessageId = (): string => {
+  return `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+};
+
+const validateProviderAndModel = (
+  provider: string,
+  model: string,
+  registry: ProviderRegistry,
   adapters: Map<string, ProviderAdapter>
-): Promise<string> => {
-  const { messages, tools, modelId, temperature, maxTokens } = JSON.parse(input) as LLMInput;
-
-  const instanceId = modelId || registry.defaultLLM;
-  if (!instanceId) {
-    throw new Error('No model instance specified and no default LLM configured');
+): { config: ProviderConfig; adapter: ProviderAdapter } => {
+  const config = registry.get(provider);
+  if (!config) {
+    throw new Error(`Provider not found: ${provider}`);
   }
 
-  const instance = registry.instances.get(instanceId);
-  if (!instance) {
-    throw new Error(`Model instance not found: ${instanceId}`);
+  const modelAvailable = config.models.some((m) => m.type === 'llm' && m.name === model);
+  if (!modelAvailable) {
+    throw new Error(`Model ${model} not available in provider ${provider}`);
   }
 
-  const adapter = adapters.get(instance.provider);
+  const adapter = adapters.get(config.adapterType);
   if (!adapter) {
-    throw new Error(`Provider adapter not found: ${instance.provider}`);
+    throw new Error(`Adapter not found: ${config.adapterType}`);
   }
 
+  return { config, adapter };
+};
+
+const handleStreamCompletion = async (
+  taskId: string,
+  adapter: ProviderAdapter,
+  config: ProviderConfig,
+  model: string,
+  messages: ChatMessage[],
+  options: CompletionOptions,
+  bus: AgentBus
+): Promise<string> => {
   let fullContent = '';
   let finalToolCalls: ToolCall[] | undefined;
   let finalUsage: unknown;
+  const messageId = generateMessageId();
+  let chunkIndex = 0;
 
-  const options: CompletionOptions = {
-    tools,
-    temperature,
-    maxTokens,
-  };
-
-  for await (const chunk of adapter.complete(instance, messages, options)) {
+  for await (const chunk of adapter.completeStream(config, model, messages, options)) {
     if (chunk.content) {
       fullContent += chunk.content;
+      await bus.invoke(
+        'shell:send',
+        taskId,
+        JSON.stringify({
+          content: chunk.content,
+          messageId,
+          index: chunk.finished ? -1 : chunkIndex++,
+        })
+      );
     }
     if (chunk.toolCalls) {
       finalToolCalls = chunk.toolCalls;
@@ -127,146 +173,177 @@ const handleLLMInvoke = async (
   });
 };
 
+const handleLLMInvoke = async (
+  taskId: string,
+  input: string,
+  registry: ProviderRegistry,
+  adapters: Map<string, ProviderAdapter>,
+  bus: AgentBus
+): Promise<string> => {
+  const {
+    messages,
+    provider,
+    model,
+    temperature,
+    maxTokens,
+    topP,
+    streamToUser,
+    tools,
+  } = JSON.parse(input) as LLMInput;
+
+  const { config, adapter } = validateProviderAndModel(provider, model, registry, adapters);
+
+  const options: CompletionOptions = {
+    tools,
+    temperature,
+    maxTokens,
+    topP,
+  };
+
+  if (streamToUser) {
+    return handleStreamCompletion(taskId, adapter, config, model, messages, options, bus);
+  } else {
+    const result = await adapter.completeNonStream(config, model, messages, options);
+    return JSON.stringify(result);
+  }
+};
+
 const registerLLMAbility = (
-  registry: ModelRegistry,
+  registry: ProviderRegistry,
   adapters: Map<string, ProviderAdapter>,
   bus: AgentBus
 ): void => {
-  bus.register(createLLMMeta(), async (input: string) =>
-    handleLLMInvoke(input, registry, adapters)
+  bus.register(createLLMMeta(), async (taskId: string, input: string) =>
+    handleLLMInvoke(taskId, input, registry, adapters, bus)
   );
 };
 
-const createListMeta = (): AbilityMeta => ({
-  id: 'model:list',
+// ============================================================================
+// model:listLLM - List LLM providers and models
+// ============================================================================
+
+const createListLLMMeta = (): AbilityMeta => ({
+  id: 'model:listLLM',
   moduleName: 'model',
-  abilityName: 'list',
-  description: 'List all registered model instances',
+  abilityName: 'listLLM',
+  description: 'List all LLM providers and available models',
   inputSchema: {
     type: 'object',
-    properties: {
-      type: {
-        type: 'string',
-        enum: ['llm', 'embedding'],
-        description: 'Filter by model type',
-      },
-    },
+    properties: {},
   },
   outputSchema: {
     type: 'object',
     properties: {
-      models: {
+      providers: {
         type: 'array',
         items: {
           type: 'object',
           properties: {
-            id: { type: 'string' },
-            type: { type: 'string' },
-            provider: { type: 'string' },
-            model: { type: 'string' },
-            isDefault: { type: 'boolean' },
+            providerName: { type: 'string' },
+            models: {
+              type: 'array',
+              items: { type: 'string' },
+            },
           },
         },
       },
       total: { type: 'number' },
     },
-    required: ['models', 'total'],
+    required: ['providers', 'total'],
   },
 });
 
-const handleListInvoke = async (input: string, registry: ModelRegistry): Promise<string> => {
-  const { type } = JSON.parse(input) as { type?: string };
+const handleListLLMInvoke = async (
+  _taskId: string,
+  _input: string,
+  registry: ProviderRegistry
+): Promise<string> => {
+  const providers = Array.from(registry.entries())
+    .map(([providerName, config]) => ({
+      providerName,
+      models: config.models
+        .filter((m) => m.type === 'llm')
+        .map((m) => m.name),
+    }))
+    .filter((p) => p.models.length > 0);
 
-  const models = Array.from(registry.instances.values())
-    .filter((m) => !type || m.type === type)
-    .map((m) => ({
-      id: m.id,
-      type: m.type,
-      provider: m.provider,
-      model: m.model,
-      isDefault: m.id === registry.defaultLLM || m.id === registry.defaultEmbedding,
-    }));
-
-  return JSON.stringify({ models, total: models.length });
+  return JSON.stringify({ providers, total: providers.length });
 };
 
-const registerListAbility = (registry: ModelRegistry, bus: AgentBus): void => {
-  bus.register(createListMeta(), async (input: string) => handleListInvoke(input, registry));
+const registerListLLMAbility = (registry: ProviderRegistry, bus: AgentBus): void => {
+  bus.register(createListLLMMeta(), async (taskId: string, input: string) =>
+    handleListLLMInvoke(taskId, input, registry)
+  );
 };
 
-const createRegisterMeta = (): AbilityMeta => ({
-  id: 'model:register',
+// ============================================================================
+// model:listEmbed - List embedding providers and models
+// ============================================================================
+
+const createListEmbedMeta = (): AbilityMeta => ({
+  id: 'model:listEmbed',
   moduleName: 'model',
-  abilityName: 'register',
-  description: 'Register a new model instance',
+  abilityName: 'listEmbed',
+  description: 'List all embedding providers and available models',
   inputSchema: {
     type: 'object',
-    properties: {
-      id: { type: 'string' },
-      type: { type: 'string', enum: ['llm', 'embedding'] },
-      provider: { type: 'string' },
-      endpoint: { type: 'string' },
-      model: { type: 'string' },
-      apiKey: { type: 'string' },
-      temperature: { type: 'number' },
-      maxTokens: { type: 'number' },
-      setAsDefault: { type: 'boolean' },
-    },
-    required: ['id', 'type', 'provider', 'endpoint', 'model'],
+    properties: {},
   },
   outputSchema: {
     type: 'object',
     properties: {
-      success: { type: 'boolean' },
-      modelId: { type: 'string' },
+      providers: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            providerName: { type: 'string' },
+            models: {
+              type: 'array',
+              items: { type: 'string' },
+            },
+          },
+        },
+      },
+      total: { type: 'number' },
     },
-    required: ['success', 'modelId'],
+    required: ['providers', 'total'],
   },
 });
 
-const handleRegisterInvoke = async (input: string, registry: ModelRegistry): Promise<string> => {
-  const data = JSON.parse(input);
-  const { id, type, provider, endpoint, model, apiKey, temperature, maxTokens, setAsDefault } =
-    data;
+const handleListEmbedInvoke = async (
+  _taskId: string,
+  _input: string,
+  registry: ProviderRegistry
+): Promise<string> => {
+  const providers = Array.from(registry.entries())
+    .map(([providerName, config]) => ({
+      providerName,
+      models: config.models
+        .filter((m) => m.type === 'embed')
+        .map((m) => m.name),
+    }))
+    .filter((p) => p.models.length > 0);
 
-  if (registry.instances.has(id)) {
-    throw new Error(`Model instance already exists: ${id}`);
-  }
-
-  registry.instances.set(id, {
-    id,
-    type,
-    provider,
-    endpoint,
-    model,
-    apiKey,
-    temperature,
-    maxTokens,
-  });
-
-  if (setAsDefault) {
-    if (type === 'llm') {
-      registry.defaultLLM = id;
-    } else {
-      registry.defaultEmbedding = id;
-    }
-  }
-
-  return JSON.stringify({ success: true, modelId: id });
+  return JSON.stringify({ providers, total: providers.length });
 };
 
-const registerRegisterAbility = (registry: ModelRegistry, bus: AgentBus): void => {
-  bus.register(createRegisterMeta(), async (input: string) =>
-    handleRegisterInvoke(input, registry)
+const registerListEmbedAbility = (registry: ProviderRegistry, bus: AgentBus): void => {
+  bus.register(createListEmbedMeta(), async (taskId: string, input: string) =>
+    handleListEmbedInvoke(taskId, input, registry)
   );
 };
 
+// ============================================================================
+// Register all model abilities
+// ============================================================================
+
 export const registerModelAbilities = (
-  registry: ModelRegistry,
+  registry: ProviderRegistry,
   adapters: Map<string, ProviderAdapter>,
   bus: AgentBus
 ): void => {
   registerLLMAbility(registry, adapters, bus);
-  registerListAbility(registry, bus);
-  registerRegisterAbility(registry, bus);
+  registerListLLMAbility(registry, bus);
+  registerListEmbedAbility(registry, bus);
 };

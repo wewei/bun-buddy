@@ -33,7 +33,8 @@ const registerListAbility = (state: BusState, bus: AgentBus): void => {
     },
   };
 
-  bus.register(listMeta, async () => {
+  bus.register(listMeta, async (taskId: string) => {
+    void taskId; // Parameter required by handler signature but not used
     const modules = listModules(state);
     return JSON.stringify({ modules });
   });
@@ -75,7 +76,7 @@ const registerAbilitiesAbility = (state: BusState, bus: AgentBus): void => {
     },
   };
 
-  bus.register(abilitiesMeta, async (input: string) => {
+  bus.register(abilitiesMeta, async (_taskId: string, input: string) => {
     const { moduleName } = JSON.parse(input);
     const abilities = listAbilitiesForModule(state, moduleName);
     return JSON.stringify({ moduleName, abilities });
@@ -109,7 +110,7 @@ const registerSchemaAbility = (state: BusState, bus: AgentBus): void => {
     },
   };
 
-  bus.register(schemaMeta, async (input: string) => {
+  bus.register(schemaMeta, async (_taskId: string, input: string) => {
     const { abilityId } = JSON.parse(input);
     const ability = getAbility(state, abilityId);
 
@@ -150,7 +151,7 @@ const registerInspectAbility = (state: BusState, bus: AgentBus): void => {
     },
   };
 
-  bus.register(inspectMeta, async (input: string) => {
+  bus.register(inspectMeta, async (_taskId: string, input: string) => {
     const { abilityId } = JSON.parse(input);
     const ability = getAbility(state, abilityId);
 

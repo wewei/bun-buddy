@@ -53,10 +53,10 @@ const saveTaskAndMessages = async (
   task: Task,
   messages: Message[]
 ): Promise<void> => {
-  await bus.invoke('system', 'ldg:task:save', JSON.stringify({ task }));
+  await bus.invoke('ldg:task:save', 'system', JSON.stringify({ task }));
 
   for (const message of messages) {
-    await bus.invoke('system', 'ldg:msg:save', JSON.stringify({ message }));
+    await bus.invoke('ldg:msg:save', 'system', JSON.stringify({ message }));
   }
 };
 
@@ -101,7 +101,7 @@ const registerSpawnAbility = (
   executeTask: (taskId: string) => Promise<void>
 ): void => {
 
-  bus.register(spawnMeta, async (input: string) => {
+  bus.register(spawnMeta, async (_taskId: string, input: string) => {
     const { goal, parentTaskId, systemPrompt } = JSON.parse(input);
 
     const taskId = generateId();
@@ -167,7 +167,7 @@ const registerSendAbility = (
   executeTask: (taskId: string) => Promise<void>
 ): void => {
 
-  bus.register(sendMeta, async (input: string) => {
+  bus.register(sendMeta, async (_taskId: string, input: string) => {
     const { receiverId, message } = JSON.parse(input);
 
     const taskState = registry.get(receiverId);
@@ -193,7 +193,7 @@ const registerSendAbility = (
       timestamp: Date.now(),
     };
 
-    await bus.invoke('system', 'ldg:msg:save', JSON.stringify({ message: userMessage }));
+    await bus.invoke('ldg:msg:save', 'system', JSON.stringify({ message: userMessage }));
 
     taskState.messages.push(userMessage);
     taskState.lastActivityTime = Date.now();
@@ -240,7 +240,7 @@ const cancelMeta: AbilityMeta = {
 
 const registerCancelAbility = (registry: TaskRegistry, bus: AgentBus): void => {
 
-  bus.register(cancelMeta, async (input: string) => {
+  bus.register(cancelMeta, async (_taskId: string, input: string) => {
     const { taskId, reason } = JSON.parse(input);
 
     const taskState = registry.get(taskId);
@@ -251,7 +251,7 @@ const registerCancelAbility = (registry: TaskRegistry, bus: AgentBus): void => {
     taskState.task.completionStatus = 'cancelled';
     taskState.task.updatedAt = Date.now();
 
-    await bus.invoke('system', 'ldg:task:save', JSON.stringify({ task: taskState.task }));
+    await bus.invoke('ldg:task:save', 'system', JSON.stringify({ task: taskState.task }));
 
     console.log(`Task ${taskId} cancelled: ${reason}`);
 
@@ -297,7 +297,7 @@ const activeMeta: AbilityMeta = {
 
 const registerActiveAbility = (registry: TaskRegistry, bus: AgentBus): void => {
 
-  bus.register(activeMeta, async (input: string) => {
+  bus.register(activeMeta, async (_taskId: string, input: string) => {
     const { limit } = JSON.parse(input) as { limit?: number };
 
     const activeTasks = Array.from(registry.values())

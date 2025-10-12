@@ -28,7 +28,7 @@ const registerTaskSaveAbility = (ledger: Ledger, bus: AgentBus): void => {
     },
   };
 
-  bus.register(taskSaveMeta, async (input: string) => {
+  bus.register(taskSaveMeta, async (_taskId: string, input: string) => {
     const { task } = JSON.parse(input) as { task: Task };
     await ledger.saveTask(task);
     return JSON.stringify({ success: true });
@@ -60,7 +60,7 @@ const registerTaskGetAbility = (ledger: Ledger, bus: AgentBus): void => {
     },
   };
 
-  bus.register(taskGetMeta, async (input: string) => {
+  bus.register(taskGetMeta, async (_taskId: string, input: string) => {
     const { taskId } = JSON.parse(input);
     const task = await ledger.getTask(taskId);
     return JSON.stringify({ task });
@@ -97,7 +97,7 @@ const registerTaskQueryAbility = (ledger: Ledger, bus: AgentBus): void => {
     },
   };
 
-  bus.register(taskQueryMeta, async (input: string) => {
+  bus.register(taskQueryMeta, async (_taskId: string, input: string) => {
     const options = JSON.parse(input);
     const result = await ledger.queryTasks(options);
     return JSON.stringify(result);
@@ -129,7 +129,7 @@ const registerCallSaveAbility = (ledger: Ledger, bus: AgentBus): void => {
     },
   };
 
-  bus.register(callSaveMeta, async (input: string) => {
+  bus.register(callSaveMeta, async (_taskId: string, input: string) => {
     const { call } = JSON.parse(input) as { call: Call };
     await ledger.saveCall(call);
     return JSON.stringify({ success: true });
@@ -161,7 +161,7 @@ const registerCallListAbility = (ledger: Ledger, bus: AgentBus): void => {
     },
   };
 
-  bus.register(callListMeta, async (input: string) => {
+  bus.register(callListMeta, async (_taskId: string, input: string) => {
     const { taskId } = JSON.parse(input);
     const calls = await ledger.listCalls({ taskId });
     return JSON.stringify({ calls });
@@ -194,7 +194,7 @@ const registerMsgSaveAbility = (ledger: Ledger, bus: AgentBus): void => {
     },
   };
 
-  bus.register(msgSaveMeta, async (input: string) => {
+  bus.register(msgSaveMeta, async (_taskId: string, input: string) => {
     const { message } = JSON.parse(input) as { message: Message };
     const messageId = await ledger.saveMessage(message);
     return JSON.stringify({ success: true, messageId });
@@ -229,7 +229,7 @@ const registerMsgListAbility = (ledger: Ledger, bus: AgentBus): void => {
     },
   };
 
-  bus.register(msgListMeta, async (input: string) => {
+  bus.register(msgListMeta, async (_taskId: string, input: string) => {
     const options = JSON.parse(input);
     const result = await ledger.listMessages(options);
     return JSON.stringify(result);

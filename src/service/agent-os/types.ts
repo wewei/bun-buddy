@@ -52,7 +52,7 @@ export type JSONSchema = {
   [key: string]: unknown;
 };
 
-export type AbilityHandler = (input: string) => Promise<string>;
+export type AbilityHandler = (taskId: string, input: string) => Promise<string>;
 
 export type AbilityMeta = {
   id: string; // e.g., 'task:spawn'
@@ -74,7 +74,7 @@ export type RegisteredAbility = {
 // ============================================================================
 
 export type AgentBus = {
-  invoke: (callerId: string, abilityId: string, input: string) => Promise<string>;
+  invoke: (abilityId: string, callerId: string, input: string) => Promise<string>;
   register: (meta: AbilityMeta, handler: AbilityHandler) => void;
   unregister: (abilityId: string) => void;
   has: (abilityId: string) => boolean;

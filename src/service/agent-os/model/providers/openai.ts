@@ -4,10 +4,11 @@ import OpenAI from 'openai';
 
 import type {
   ProviderAdapter,
-  ModelInstance,
+  ProviderConfig,
   ChatMessage,
   CompletionOptions,
   CompletionChunk,
+  CompletionResult,
   EmbeddingResult,
   ToolCall,
 } from '../types';
@@ -56,26 +57,44 @@ const mergeToolCalls = (existing: ToolCall[], incoming: IncomingToolCall[]): Too
   return merged;
 };
 
-const createOpenAIClient = (instance: ModelInstance): OpenAI => {
+const createOpenAIClient = (config: ProviderConfig): OpenAI => {
   return new OpenAI({
-    baseURL: instance.endpoint,
-    apiKey: instance.apiKey || process.env.OPENAI_API_KEY,
+    baseURL: config.endpoint,
+    apiKey: config.apiKey || process.env.OPENAI_API_KEY,
   });
 };
 
 const streamOpenAICompletion = async (
   client: OpenAI,
-  instance: ModelInstance,
+  model: string,
   messages: ChatMessage[],
   options: CompletionOptions
 ) => {
   return await client.chat.completions.create({
-    model: instance.model,
+    model,
     messages: messages as OpenAI.Chat.ChatCompletionMessageParam[],
     tools: options.tools as OpenAI.Chat.ChatCompletionTool[],
-    temperature: options.temperature ?? instance.temperature,
-    max_tokens: options.maxTokens ?? instance.maxTokens,
+    temperature: options.temperature,
+    max_tokens: options.maxTokens,
+    top_p: options.topP,
     stream: true,
+  });
+};
+
+const nonStreamOpenAICompletion = async (
+  client: OpenAI,
+  model: string,
+  messages: ChatMessage[],
+  options: CompletionOptions
+) => {
+  return await client.chat.completions.create({
+    model,
+    messages: messages as OpenAI.Chat.ChatCompletionMessageParam[],
+    tools: options.tools as OpenAI.Chat.ChatCompletionTool[],
+    temperature: options.temperature,
+    max_tokens: options.maxTokens,
+    top_p: options.topP,
+    stream: false,
   });
 };
 
@@ -121,47 +140,101 @@ const processStreamChunk = (
   return { updatedToolCalls };
 };
 
-export const createOpenAIAdapter = (): ProviderAdapter => ({
-  complete: async function* (
-    instance: ModelInstance,
-    messages: ChatMessage[],
-    options: CompletionOptions = {}
-  ): AsyncGenerator<CompletionChunk> {
-    const client = createOpenAIClient(instance);
-    const stream = await streamOpenAICompletion(client, instance, messages, options);
+const completeStreamImpl = async function* (
+  config: ProviderConfig,
+  model: string,
+  messages: ChatMessage[],
+  options: CompletionOptions = {}
+): AsyncGenerator<CompletionChunk> {
+  const client = createOpenAIClient(config);
+  const stream = await streamOpenAICompletion(client, model, messages, options);
 
-    let accumulatedToolCalls: ToolCall[] = [];
+  let accumulatedToolCalls: ToolCall[] = [];
 
-    for await (const chunk of stream) {
-      const result = processStreamChunk(chunk, accumulatedToolCalls);
-      accumulatedToolCalls = result.updatedToolCalls;
+  for await (const chunk of stream) {
+    const result = processStreamChunk(chunk, accumulatedToolCalls);
+    accumulatedToolCalls = result.updatedToolCalls;
 
-      if (result.completionChunk) {
-        yield result.completionChunk;
-      }
+    if (result.completionChunk) {
+      yield result.completionChunk;
     }
-  },
+  }
+};
 
-  embed: async (instance: ModelInstance, text: string): Promise<EmbeddingResult> => {
-    const client = createOpenAIClient(instance);
-
-    const response = await client.embeddings.create({
-      model: instance.model,
-      input: text,
-    });
-
-    const embeddingData = response.data[0];
-    if (!embeddingData || !response.usage) {
-      throw new Error('Invalid embedding response from OpenAI');
+const convertToolCalls = (toolCalls: OpenAI.Chat.ChatCompletionMessageToolCall[]): ToolCall[] => {
+  return toolCalls.map((tc) => {
+    if (tc.type !== 'function') {
+      throw new Error(`Unsupported tool call type: ${tc.type}`);
     }
-
     return {
-      embedding: embeddingData.embedding,
-      dimensions: embeddingData.embedding.length,
-      usage: {
-        promptTokens: response.usage.prompt_tokens,
-        totalTokens: response.usage.total_tokens,
+      id: tc.id,
+      type: 'function' as const,
+      function: {
+        name: tc.function.name,
+        arguments: tc.function.arguments,
       },
     };
-  },
+  });
+};
+
+const completeNonStreamImpl = async (
+  config: ProviderConfig,
+  model: string,
+  messages: ChatMessage[],
+  options: CompletionOptions = {}
+): Promise<CompletionResult> => {
+  const client = createOpenAIClient(config);
+  const response = await nonStreamOpenAICompletion(client, model, messages, options);
+
+  const choice = response.choices[0];
+  if (!choice) {
+    throw new Error('No response from OpenAI');
+  }
+
+  const toolCalls = choice.message.tool_calls ? convertToolCalls(choice.message.tool_calls) : undefined;
+
+  return {
+    content: choice.message.content || '',
+    toolCalls,
+    usage: response.usage
+      ? {
+          promptTokens: response.usage.prompt_tokens,
+          completionTokens: response.usage.completion_tokens,
+          totalTokens: response.usage.total_tokens,
+        }
+      : undefined,
+  };
+};
+
+const embedImpl = async (
+  config: ProviderConfig,
+  model: string,
+  text: string
+): Promise<EmbeddingResult> => {
+  const client = createOpenAIClient(config);
+
+  const response = await client.embeddings.create({
+    model,
+    input: text,
+  });
+
+  const embeddingData = response.data[0];
+  if (!embeddingData || !response.usage) {
+    throw new Error('Invalid embedding response from OpenAI');
+  }
+
+  return {
+    embedding: embeddingData.embedding,
+    dimensions: embeddingData.embedding.length,
+    usage: {
+      promptTokens: response.usage.prompt_tokens,
+      totalTokens: response.usage.total_tokens,
+    },
+  };
+};
+
+export const createOpenAIAdapter = (): ProviderAdapter => ({
+  completeStream: completeStreamImpl,
+  completeNonStream: completeNonStreamImpl,
+  embed: embedImpl,
 });
