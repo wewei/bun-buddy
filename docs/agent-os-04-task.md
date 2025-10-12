@@ -2,25 +2,26 @@
 
 ## Overview
 
-The **Task Manager** is the process management layer of Agent OS. It manages the lifecycle of tasks—from creation through execution to completion—with a **persistence-first architecture**. Unlike traditional in-memory execution models, every aspect of task execution (tasks, ability calls, messages) is continuously persisted to the Memory module, enabling full recovery from unexpected failures.
+The **Task Manager** is the process management layer of Agent OS. It manages the lifecycle of tasks—from creation through execution to completion—with a **persistence-first architecture**. Unlike traditional in-memory execution models, every aspect of task execution (tasks, ability calls, messages) is continuously persisted to the Ledger, enabling full recovery from unexpected failures.
 
-Task Manager sits **below the Agent Bus**: it both invokes bus abilities (e.g., `model:llm`, `mem:task:save`) and registers its own lifecycle management abilities (e.g., `task:route`, `task:create`, `task:cancel`).
+Task Manager sits **below the Agent Bus**: it both invokes bus abilities (e.g., `model:llm`, `ldg:task:save`) and registers its own lifecycle management abilities (e.g., `task:route`, `task:create`, `task:cancel`).
 
 ### Key Design Principles
 
-**Persistence-First**: A task in Agent OS represents an Agent's series of conversations with an LLM to achieve a specific goal. The entire execution process is continuously persisted to Memory. If the Agent process crashes, it can resume and continue unfinished tasks upon restart based on persisted records.
+**Persistence-First**: A task in Agent OS represents an Agent's series of conversations with an LLM to achieve a specific goal. The entire execution process is continuously persisted to Ledger. If the Agent process crashes, it can resume and continue unfinished tasks upon restart based on persisted records.
 
 **Clear Separation of Concerns**:
 - **Task Manager**: Core lifecycle operations (routing, creation, cancellation, listing active tasks)
-- **Memory Module**: Persistent storage and detailed queries (task details, call history, message records)
+- **Ledger Module**: Persistent storage in SQLite (task details, call history, message records)
+- **Memory Module**: Optional semantic knowledge layer (vectors + graph)
 
-This separation enables Task Manager to remain lightweight and stateless, while Memory provides durable storage and rich querying capabilities.
+This separation enables Task Manager to remain lightweight and stateless, while Ledger provides durable storage and rich querying capabilities.
 
 ## Core Concepts
 
 ### Three Core Entities
 
-Task execution is represented through three types of entities, all persisted in Memory:
+Task execution is represented through three types of entities, all persisted in Ledger:
 
 #### Task Entity
 
@@ -86,8 +87,9 @@ type Message = {
   taskId: string;                // Task this message belongs to
   role: MessageRole;             // Message sender role
   content: string;               // Message content (supports markdown)
-  timestamp: number;             // Message receipt timestamp
-                                 // For streaming: timestamp of first chunk
+  timestamp: number;             // Message timestamp
+                                 // For streaming: completion time (when fully received)
+                                 // For non-streaming: receipt time
 };
 
 type MessageRole = 
@@ -95,6 +97,8 @@ type MessageRole =
   | 'user'                       // User input
   | 'assistant';                 // LLM response
 ```
+
+**Message Immutability**: Messages are **immutable** once saved to Ledger. Streaming messages are accumulated in memory and only saved after complete reception.
 
 ### Entity Relationships
 
@@ -363,7 +367,7 @@ When a task is created or receives a new message, it enters the execution loop:
 ```
 ┌─────────────────────────────────────────────────┐
 │ 1. Load task context from Memory                │
-│    - Fetch all messages via mem:message:list    │
+│    - Fetch all messages via ldg:msg:list    │
 └───────────────────┬─────────────────────────────┘
                     │
                     ▼
@@ -416,7 +420,7 @@ const loadTaskContext = async (
   taskId: string,
   bus: AgentBus
 ): Promise<Message[]> => {
-  const result = await bus.invoke('mem:message:list')(
+  const result = await bus.invoke('ldg:msg:list')(
     JSON.stringify({ taskId })
   );
   
@@ -456,12 +460,13 @@ const processLLMResponse = async (
   let content = '';
   const toolCalls: ToolCall[] = [];
   
+  // Accumulate streaming response in memory
   for await (const chunk of stream) {
     const data = JSON.parse(chunk);
     
     if (data.content) {
       content += data.content;
-      // Stream to user in real-time
+      // Stream to user in real-time, but don't save to Ledger yet
       emitToUser({ type: 'content', content: data.content });
     }
     
@@ -470,7 +475,8 @@ const processLLMResponse = async (
     }
   }
   
-  // Save assistant message to Memory
+  // Streaming complete, now save full message to Ledger
+  // timestamp will be set to current time (completion time)
   await saveMessage(taskId, 'assistant', content, bus);
   
   return { content, toolCalls };
@@ -524,7 +530,7 @@ const executeToolCall = async (
   // Update call status to in_progress and save
   call.status = 'in_progress';
   call.updatedAt = Date.now();
-  await bus.invoke('mem:call:save')(JSON.stringify({ call }));
+  await bus.invoke('ldg:call:save')(JSON.stringify({ call }));
   
   try {
     // Execute ability
@@ -566,7 +572,7 @@ const executeToolCall = async (
   }
   
   // Save final call state
-  await bus.invoke('mem:call:save')(JSON.stringify({ call }));
+  await bus.invoke('ldg:call:save')(JSON.stringify({ call }));
 };
 ```
 
@@ -581,7 +587,7 @@ const completeTask = async (
   task.completionStatus = 'success';
   task.updatedAt = Date.now();
   
-  await bus.invoke('mem:task:save')(JSON.stringify({ task }));
+  await bus.invoke('ldg:task:save')(JSON.stringify({ task }));
   
   emitToUser({
     type: 'task_complete',
@@ -614,7 +620,7 @@ const createTask = async (
   };
   
   // Save task to Memory
-  await bus.invoke('mem:task:save')(JSON.stringify({ task }));
+  await bus.invoke('ldg:task:save')(JSON.stringify({ task }));
   
   // Create system message
   await saveMessage(taskId, 'system', systemPrompt, bus);
@@ -722,55 +728,55 @@ const extractExplicitTaskId = (message: string): string | undefined => {
 };
 ```
 
-## Integration with Memory
+## Integration with Ledger
 
-Task Manager relies on Memory module for all persistence operations.
+Task Manager relies on Ledger module for all persistence operations.
 
-### Required Memory Abilities
+### Required Ledger Abilities
 
-#### mem:task:save
+#### ldg:task:save
 
 Save or update a task entity.
 
 **Input**: `{ task: Task }`  
 **Output**: `{ success: boolean }`
 
-#### mem:task:get
+#### ldg:task:get
 
 Retrieve a task entity by ID.
 
 **Input**: `{ taskId: string }`  
 **Output**: `{ task: Task | null }`
 
-#### mem:task:query
+#### ldg:task:query
 
 Query tasks with filters.
 
 **Input**: `{ completionStatus?: string; limit?: number; offset?: number }`  
 **Output**: `{ tasks: Task[]; total: number }`
 
-#### mem:call:save
+#### ldg:call:save
 
 Save or update a call entity.
 
 **Input**: `{ call: Call }`  
 **Output**: `{ success: boolean }`
 
-#### mem:call:list
+#### ldg:call:list
 
 List all calls for a task.
 
 **Input**: `{ taskId: string }`  
 **Output**: `{ calls: Call[] }`
 
-#### mem:message:save
+#### ldg:msg:save
 
 Save a message entity.
 
 **Input**: `{ message: Message }`  
 **Output**: `{ success: boolean; messageId: string }`
 
-#### mem:message:list
+#### ldg:msg:list
 
 List all messages for a task.
 
@@ -794,7 +800,7 @@ const saveMessage = async (
     timestamp: Date.now()
   };
   
-  await bus.invoke('mem:message:save')(
+  await bus.invoke('ldg:msg:save')(
     JSON.stringify({ message })
   );
   
@@ -805,7 +811,7 @@ const loadTask = async (
   taskId: string,
   bus: AgentBus
 ): Promise<Task> => {
-  const result = await bus.invoke('mem:task:get')(
+  const result = await bus.invoke('ldg:task:get')(
     JSON.stringify({ taskId })
   );
   
@@ -877,7 +883,7 @@ const recoverTask = async (
   bus: AgentBus
 ): Promise<void> => {
   // Check for in-progress calls
-  const callsResult = await bus.invoke('mem:call:list')(
+  const callsResult = await bus.invoke('ldg:call:list')(
     JSON.stringify({ taskId })
   );
   
@@ -894,7 +900,7 @@ const recoverTask = async (
     });
     call.updatedAt = Date.now();
     
-    await bus.invoke('mem:call:save')(
+    await bus.invoke('ldg:call:save')(
       JSON.stringify({ call })
     );
     
@@ -980,7 +986,7 @@ const failTask = async (
   task.completionStatus = `failed: ${reason}`;
   task.updatedAt = Date.now();
   
-  await bus.invoke('mem:task:save')(JSON.stringify({ task }));
+  await bus.invoke('ldg:task:save')(JSON.stringify({ task }));
   
   await saveMessage(
     taskId,
@@ -1042,12 +1048,12 @@ The parent task receives the subtask ID and can:
 
 ### Querying Subtasks
 
-Use Memory module to query subtasks:
+Use Ledger to query subtasks:
 
 ```typescript
-const result = await bus.invoke('mem:task:query')(JSON.stringify({
+const result = await bus.invoke('ldg:task:query')(JSON.stringify({
   parentTaskId: 'task-root',
-  completionStatus: undefined  // Only active subtasks
+  completionStatus: 'null'  // Only active subtasks
 }));
 
 const { tasks } = JSON.parse(result);
@@ -1156,7 +1162,7 @@ test('task:create creates task and persists to Memory', async () => {
   expect(taskId).toBeDefined();
   
   // Verify task saved to Memory
-  const savedTask = await bus.invoke('mem:task:get')(
+  const savedTask = await bus.invoke('ldg:task:get')(
     JSON.stringify({ taskId })
   );
   expect(JSON.parse(savedTask).task).toBeDefined();
@@ -1202,12 +1208,12 @@ test('Full task execution with tool calls', async () => {
   await waitForTaskCompletion(taskId, bus);
   
   // Verify all entities persisted
-  const task = await bus.invoke('mem:task:get')(
+  const task = await bus.invoke('ldg:task:get')(
     JSON.stringify({ taskId })
   );
   expect(JSON.parse(task).task.completionStatus).toBe('success');
   
-  const messages = await bus.invoke('mem:message:list')(
+  const messages = await bus.invoke('ldg:msg:list')(
     JSON.stringify({ taskId })
   );
   expect(JSON.parse(messages).messages.length).toBeGreaterThan(0);
@@ -1220,10 +1226,11 @@ Task Manager provides:
 
 ✅ **Persistence-first architecture** with continuous state saving  
 ✅ **Full crash recovery** by resuming from persisted state  
-✅ **Clear separation of concerns** with Memory module  
+✅ **Clear separation of concerns** with Ledger (persistence) and Memory (semantics)  
 ✅ **Lightweight in-memory state** enabling horizontal scaling  
 ✅ **Intelligent message routing** via LLM-based decisions  
 ✅ **Complete execution audit trail** through Call and Message entities  
+✅ **Streaming message handling** with completion-based timestamps  
 ✅ **Graceful error handling** with automatic failure recovery
 
-The persistence-first design ensures Agent OS tasks are durable and resilient, capable of surviving process crashes and providing complete visibility into task execution history.
+The persistence-first design with SQLite Ledger ensures Agent OS tasks are durable and resilient, capable of surviving process crashes and providing complete visibility into task execution history.

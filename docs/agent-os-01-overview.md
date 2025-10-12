@@ -2,7 +2,7 @@
 
 ## Introduction
 
-Agent OS is a complete rewrite of the Agent system using an **Operating System Bus Architecture**. The design draws inspiration from OS concepts: Shell (user interface), Task Manager (process management), Memory (file system), Model Manager (ABI), and a central Agent Bus for inter-module communication.
+Agent OS is a complete rewrite of the Agent system using an **Operating System Bus Architecture**. The design draws inspiration from OS concepts: Shell (user interface), Task Manager (process management), Ledger (transaction log), Memory (semantic index), Model Manager (ABI), and a central Agent Bus for inter-module communication.
 
 ## Core Concepts
 
@@ -16,32 +16,34 @@ Unlike traditional layered architectures, Agent OS uses a **bus-based architectu
                  └──────────┬─────────┘
                             │ invoke/invokeStream
                             ▼
-      ╔══════════════════════════════════════════════╗
-      ║         Agent Bus Controller                 ║
-      ║  - invoke(abilityId)(input)                  ║
-      ║  - invokeStream(abilityId)(input)            ║
-      ║  - Ability Discovery (list/schema/inspect)   ║
-      ╚══════════════════════════════════════════════╝
-                  ▲         ▲         ▲         ▲
-      ┌───────────┘         │         │         └──────────┐
-      │                     │         │                    │
-┌─────▼──────┐  ┌───────────▼──┐   ┌──▼────────┐  ┌────────▼─────┐
-│   Task     │  │    Model     │   │  Memory   │  │  Bus Ctrl    │
-│  Manager   │  │   Manager    │   │  (Store)  │  │ (Discovery)  │
-├────────────┤  ├──────────────┤   ├───────────┤  ├──────────────┤
-│task:spawn  │  │model:llm     │   │mem:save   │  │bus:list      │
-│task:list   │  │model:embed   │   │mem:query  │  │bus:schema    │
-│task:kill   │  │model:list    │   │mem:archive│  │bus:inspect   │
-└────────────┘  └──────────────┘   └───────────┘  └──────────────┘
+      ╔══════════════════════════════════════════════════════════╗
+      ║              Agent Bus Controller                        ║
+      ║  - invoke(abilityId)(input)                              ║
+      ║  - invokeStream(abilityId)(input)                        ║
+      ║  - Ability Discovery (list/schema/inspect)               ║
+      ╚══════════════════════════════════════════════════════════╝
+               ▲          ▲          ▲          ▲          ▲
+      ┌────────┘          │          │          │          └────────┐
+      │                   │          │          │                   │
+┌─────▼──────┐  ┌─────────▼───┐  ┌──▼───────┐  ┌────▼─────┐  ┌────▼─────┐
+│   Task     │  │    Model    │  │  Ledger  │  │  Memory  │  │  Bus     │
+│  Manager   │  │   Manager   │  │ (SQLite) │  │(Semantic)│  │  Ctrl    │
+├────────────┤  ├─────────────┤  ├──────────┤  ├──────────┤  ├──────────┤
+│task:route  │  │model:llm    │  │ldg:task:*│  │mem:      │  │bus:list  │
+│task:create │  │model:embed  │  │ldg:call:*│  │ retrieve │  │bus:schema│
+│task:cancel │  │model:list   │  │ldg:msg:* │  │mem:graph │  │bus:      │
+│task:active │  │             │  │          │  │mem:      │  │ inspect  │
+│            │  │             │  │          │  │ archive  │  │          │
+└────────────┘  └─────────────┘  └──────────┘  └──────────┘  └──────────┘
       ▲ Below Bus: Both call and register abilities
 ```
 
 ### Terminology
 
 - **Above Bus**: Modules that only invoke abilities but do not register any (e.g., Shell)
-- **Below Bus**: Modules that both invoke and register abilities (e.g., Task Manager, Memory, Model Manager, Bus Controller)
+- **Below Bus**: Modules that both invoke and register abilities (e.g., Task Manager, Ledger, Memory, Model Manager, Bus Controller)
 - **Ability**: A callable capability with signature `(input: string) => Promise<string>` or `(input: string) => AsyncGenerator<string>`
-- **Ability ID**: Unique identifier following pattern `${moduleName}:${abilityName}` (e.g., `task:spawn`, `model:llm`)
+- **Ability ID**: Unique identifier following pattern `${moduleName}:${abilityName}` (e.g., `task:route`, `ldg:task:save`, `mem:retrieve`)
 
 ## Module Responsibilities
 
@@ -81,19 +83,21 @@ Unlike traditional layered architectures, Agent OS uses a **bus-based architectu
 **Purpose**: Process/task lifecycle management
 
 **Responsibilities**:
-- Create and manage concurrent tasks
-- Maintain isolated context per task
-- Route messages to appropriate tasks
+- Route user messages to appropriate tasks
+- Create and cancel tasks
 - Execute task run loops with LLM
+- Persist all execution state to Ledger
 
 **Registered Abilities**:
-- `task:spawn` - Create new task
-- `task:send` - Send message to task
-- `task:list` - List tasks with filters
-- `task:get` - Get task details
-- `task:kill` - Terminate task
+- `task:route` - Route message to task
+- `task:create` - Create new task
+- `task:cancel` - Cancel task
+- `task:active` - List active tasks
 
-**Key Feature**: Task Manager can invoke `task:spawn` to create sub-tasks, enabling recursive task trees.
+**Key Features**: 
+- Persistence-first architecture with continuous state saving to Ledger
+- Streaming message handling with completion-based timestamps
+- Full crash recovery capability
 
 ### 4. Model Manager (Below Bus)
 
@@ -111,26 +115,50 @@ Unlike traditional layered architectures, Agent OS uses a **bus-based architectu
 - `model:list` - List available models
 - `model:register` - Register model instance
 
-### 5. Memory (Below Bus)
+### 5. Ledger (Below Bus)
 
-**Purpose**: Persistent storage and knowledge management
+**Purpose**: Persistent storage ledger for complete task history
 
 **Responsibilities**:
-- Store complete task records (lower layer)
-- Maintain semantic knowledge graph (upper layer)
-- Support vector similarity search
-- Enable graph traversal queries
+- Store Task, Call, Message entities in SQLite
+- Provide structured queries (by time, by task, by status)
+- Ensure data consistency with ACID transactions
+- Support crash recovery and audit trails
+- Manage mutable state (Task/Call) and immutable records (Message)
 
 **Registered Abilities**:
-- `mem:save` - Save task record
-- `mem:query` - Query historical tasks
-- `mem:retrieve` - Semantic retrieval
-- `mem:archive` - Archive to knowledge graph
-- `mem:graph` - Graph traversal
+- `ldg:task:save`, `ldg:task:get`, `ldg:task:query` - Task operations
+- `ldg:call:save`, `ldg:call:list` - Call operations
+- `ldg:msg:save`, `ldg:msg:list` - Message operations
+
+**Storage**: `$HOME/.bun-buddy/ledger.sqlite`
+
+**Key Features**:
+- Task and Call states are mutable (can be updated)
+- Messages are immutable (append-only)
+- Streaming messages saved only after complete reception
+
+### 6. Memory (Below Bus)
+
+**Purpose**: Semantic knowledge layer
+
+**Responsibilities**:
+- Extract knowledge from Ledger task records
+- Build vector index (Chroma) for semantic search
+- Maintain knowledge graph (Neo4j) for relationships
+- Provide intelligent retrieval and discovery
+
+**Registered Abilities**:
+- `mem:retrieve` - Semantic similarity search
+- `mem:graph` - Knowledge graph traversal
+- `mem:archive` - Extract and index task knowledge
+- `mem:related` - Find related tasks
 
 **Storage Architecture**:
-- **Lower Layer**: File system (complete task records)
-- **Upper Layer**: Chroma (vectors) + Neo4j (graph)
+- **Chroma**: Vector database for semantic similarity
+- **Neo4j**: Graph database for knowledge relationships
+
+**Key Feature**: Optional enhancement layer that reads from Ledger for knowledge extraction
 
 ## Code Structure
 
@@ -153,7 +181,7 @@ src/service/agent-os/
 ├── task/                       # Task Manager
 │   ├── index.ts                # Task manager implementation
 │   ├── types.ts                # Task-specific types
-│   ├── abilities.ts            # Task abilities (spawn, send, etc)
+│   ├── abilities.ts            # Task abilities (route, create, etc)
 │   ├── runloop.ts              # Task execution loop
 │   └── router.ts               # Message routing logic
 │
@@ -165,17 +193,21 @@ src/service/agent-os/
 │       ├── openai.ts
 │       └── anthropic.ts
 │
-└── memory/                     # Memory
+├── ledger/                     # Ledger (SQLite persistence)
+│   ├── index.ts                # Ledger implementation
+│   ├── types.ts                # Ledger-specific types
+│   ├── abilities.ts            # Ledger abilities (save, get, query, list)
+│   ├── db.ts                   # SQLite connection and initialization
+│   ├── schema.ts               # Table structure definitions
+│   └── queries.ts              # SQL query encapsulation
+│
+└── memory/                     # Memory (Semantic index)
     ├── index.ts                # Memory implementation
     ├── types.ts                # Memory-specific types
-    ├── abilities.ts            # Memory abilities
-    ├── lower/                  # Lower layer (file storage)
-    │   ├── index.ts
-    │   └── storage.ts
-    └── upper/                  # Upper layer (semantic index)
-        ├── index.ts
-        ├── vector.ts           # Chroma integration
-        └── graph.ts            # Neo4j integration
+    ├── abilities.ts            # Memory abilities (retrieve, graph, archive)
+    ├── extract.ts              # Knowledge extraction logic
+    ├── vector.ts               # Chroma integration
+    └── graph.ts                # Neo4j integration
 ```
 
 ## Design Principles
@@ -354,7 +386,8 @@ Each module is documented in detail:
 2. **Agent Bus** → `agent-os-03-bus.md`
 3. **Task Manager** → `agent-os-04-task.md`
 4. **Model Manager** → `agent-os-05-model.md`
-5. **Memory** → `agent-os-06-memory.md`
+5. **Memory (Semantic Layer)** → `agent-os-06-memory.md`
+6. **Ledger (Persistence Layer)** → `agent-os-07-ledger.md`
 
 ## Summary
 
@@ -363,9 +396,10 @@ Agent OS architecture provides:
 ✅ **Decoupled modules** via bus-based communication
 ✅ **Uniform interfaces** for all abilities
 ✅ **Discoverable capabilities** through introspection
-✅ **Recursive task trees** with Task Manager as ability
-✅ **Clean separation** of concerns (Shell, Task, Model, Memory)
+✅ **Persistence-first design** with SQLite Ledger
+✅ **Optional semantic layer** with Memory (vectors + graph)
+✅ **Clear separation** of concerns (Shell, Task, Model, Ledger, Memory)
 ✅ **Parallel development** alongside existing system
 
-The OS analogy makes the system intuitive: Shell for user interaction, Tasks for processes, Memory for storage, Model Manager for hardware abstraction, and Agent Bus as the system bus connecting everything.
+The OS analogy makes the system intuitive: Shell for user interaction, Task Manager for processes, Ledger for transaction log, Memory for semantic index, Model Manager for hardware abstraction, and Agent Bus as the system bus connecting everything.
 

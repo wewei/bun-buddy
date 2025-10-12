@@ -1,256 +1,138 @@
-# Agent OS - Memory Module
+# Agent OS - Memory
 
 ## Overview
 
-The **Memory** module is the persistent storage layer of Agent OS. Like an operating system's file system and database, Memory provides both **complete record storage** (lower layer) and **semantic indexing** (upper layer) for intelligent retrieval.
+The **Memory** module is the semantic knowledge layer of Agent OS. While Ledger stores complete task execution history, Memory extracts knowledge and builds semantic indexes for intelligent retrieval and discovery.
 
-Memory sits **below the Agent Bus**: it registers abilities for saving, querying, and retrieving information while integrating with external storage systems (file system, Chroma, Neo4j).
+Memory sits **below the Agent Bus**: it registers abilities for semantic search, knowledge graph traversal, and task archiving while reading from Ledger for complete task records.
 
-## Core Concepts
+### Key Characteristics
 
-### Dual-Layer Architecture
+**Semantic Layer**: Memory operates at a higher abstraction level than Ledger, focusing on meaning and relationships rather than raw records.
 
-```
-┌─────────────────────────────────────────────────┐
-│              Upper Layer (Semantic)             │
-│                                                 │
-│  ┌──────────────┐         ┌─────────────────┐  │
-│  │   Chroma     │         │     Neo4j       │  │
-│  │  (Vectors)   │         │  (Graph DB)     │  │
-│  └──────────────┘         └─────────────────┘  │
-│                                                 │
-│  • Vector similarity search                    │
-│  • Knowledge graph traversal                   │
-│  • Semantic clustering                         │
-└─────────────────────────────────────────────────┘
-                      ▲
-                      │ References via taskId
-                      ▼
-┌─────────────────────────────────────────────────┐
-│             Lower Layer (Complete)              │
-│                                                 │
-│  ┌──────────────────────────────────────────┐  │
-│  │      File System Storage                 │  │
-│  │  ~/.agent-os/tasks/                      │  │
-│  │    ├── task-abc123.json                  │  │
-│  │    ├── task-xyz789.json                  │  │
-│  │    └── ...                               │  │
-│  └──────────────────────────────────────────┘  │
-│                                                 │
-│  • Complete task records                       │
-│  • Full message history                        │
-│  • Audit trail                                 │
-└─────────────────────────────────────────────────┘
-```
+**Optional Enhancement**: Memory is not required for Agent OS to function. Agent can operate with Ledger alone for basic persistence and recovery.
 
-### Lower Layer - Complete Records
-
-**Purpose**: Store complete, unmodified task records for auditing and reconstruction.
-
-**Storage**: File system (JSON files)
-
-**Key Feature**: Every task is saved in its entirety, including all messages, tool calls, and metadata.
-
-### Upper Layer - Semantic Index
-
-**Purpose**: Enable intelligent retrieval through vector similarity and graph relationships.
-
-**Storage**: 
+**Dual Storage**: 
 - **Chroma**: Vector database for semantic similarity search
 - **Neo4j**: Graph database for knowledge relationships
 
-**Key Feature**: Extracts knowledge from tasks and builds a queryable knowledge graph.
+**Knowledge Extraction**: Uses LLM to extract concepts, facts, and procedures from complete task conversations stored in Ledger.
+
+## Architecture
+
+```
+┌──────────────────────────────────────────────┐
+│            Agent Bus                         │
+└────────────┬─────────────────────────────────┘
+             │
+             ▼
+┌──────────────────────────────────────────────┐
+│          Memory Module                       │
+│                                              │
+│  ┌────────────────┐    ┌─────────────────┐  │
+│  │  Chroma        │    │  Neo4j          │  │
+│  │  (Vectors)     │    │  (Graph)        │  │
+│  └────────────────┘    └─────────────────┘  │
+│                                              │
+│  Abilities:                                  │
+│  • mem:retrieve  - Semantic search          │
+│  • mem:graph     - Knowledge traversal      │
+│  • mem:archive   - Extract & index          │
+│  • mem:related   - Find related tasks       │
+└──────────────┬───────────────────────────────┘
+               │ Read tasks
+               ▼
+┌──────────────────────────────────────────────┐
+│          Ledger (SQLite)                     │
+│  • Task records                              │
+│  • Call history                              │
+│  • Message logs                              │
+└──────────────────────────────────────────────┘
+```
+
+## Core Concepts
+
+### Knowledge Node
+
+A knowledge node represents a discrete unit of extracted knowledge:
+
+```typescript
+type KnowledgeNode = {
+  id: string;                    // Unique node identifier
+  type: KnowledgeNodeType;       // Node category
+  content: string;               // Text content
+  embedding: number[];           // Vector representation
+  
+  source: {
+    taskId: string;              // Ledger task ID
+    timestamp: number;           // When extracted
+  };
+  
+  metadata: {
+    extractedBy: string;         // 'llm' or 'rule'
+    confidence?: number;         // 0-1, extraction confidence
+  };
+};
+
+type KnowledgeNodeType = 
+  | 'concept'                    // Abstract concept (e.g., "regression analysis")
+  | 'fact'                       // Concrete fact (e.g., "Q1 sales were $1.2M")
+  | 'procedure'                  // How-to knowledge (e.g., "steps to clean data")
+  | 'question'                   // User question
+  | 'answer';                    // Assistant answer
+```
+
+### Knowledge Edge
+
+A knowledge edge represents a relationship between nodes:
+
+```typescript
+type KnowledgeEdge = {
+  id: string;                    // Unique edge identifier
+  type: KnowledgeEdgeType;       // Relationship type
+  from: string;                  // Source node ID
+  to: string;                    // Target node ID
+  weight: number;                // 0-1, relationship strength
+  
+  metadata?: {
+    createdBy: string;           // How edge was created
+    reason?: string;             // Why relationship exists
+  };
+};
+
+type KnowledgeEdgeType = 
+  | 'related_to'                 // General semantic relation
+  | 'followed_by'                // Temporal/causal sequence
+  | 'contradicts'                // Conflicting information
+  | 'derived_from'               // Logical derivation
+  | 'part_of'                    // Hierarchical containment
+  | 'answered_by';               // Question-answer link
+```
+
+### Knowledge Graph Structure
+
+```
+┌─────────────┐
+│  Concept    │──related_to──┐
+│ "Sales      │              │
+│  Analysis"  │              ▼
+└──────┬──────┘        ┌──────────┐
+       │               │  Fact    │
+       │ part_of       │ "Q1: $1M"│
+       │               └──────────┘
+       ▼                     ▲
+┌──────────────┐             │
+│  Procedure   │─derived_from┘
+│ "Calculate   │
+│  Growth"     │
+└──────────────┘
+```
 
 ## Registered Abilities
 
-### mem:save
-
-**Description**: Save a complete task record to lower layer storage.
-
-**Input Schema**:
-```json
-{
-  "type": "object",
-  "properties": {
-    "task": {
-      "type": "object",
-      "description": "Complete task object to save"
-    }
-  },
-  "required": ["task"]
-}
-```
-
-**Output Schema**:
-```json
-{
-  "type": "object",
-  "properties": {
-    "success": { "type": "boolean" },
-    "taskId": { "type": "string" },
-    "path": { "type": "string", "description": "File path where task was saved" }
-  },
-  "required": ["success", "taskId"]
-}
-```
-
-**Example**:
-```typescript
-const result = await bus.invoke('mem:save')(JSON.stringify({
-  task: {
-    id: 'task-abc123',
-    goal: 'Analyze sales data',
-    status: 'completed',
-    context: [ /* messages */ ],
-    createdAt: Date.now(),
-    completedAt: Date.now()
-  }
-}));
-
-// { "success": true, "taskId": "task-abc123", "path": "~/.agent-os/tasks/task-abc123.json" }
-```
-
-### mem:query
-
-**Description**: Query historical tasks by filters (lower layer).
-
-**Input Schema**:
-```json
-{
-  "type": "object",
-  "properties": {
-    "status": {
-      "type": "string",
-      "enum": ["pending", "running", "waiting", "completed", "failed", "killed"]
-    },
-    "fromDate": {
-      "type": "number",
-      "description": "Start timestamp (Unix ms)"
-    },
-    "toDate": {
-      "type": "number",
-      "description": "End timestamp (Unix ms)"
-    },
-    "limit": {
-      "type": "number",
-      "description": "Maximum results to return"
-    },
-    "offset": {
-      "type": "number",
-      "description": "Pagination offset"
-    }
-  }
-}
-```
-
-**Output Schema**:
-```json
-{
-  "type": "object",
-  "properties": {
-    "tasks": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "description": "Task summary (not full context)"
-      }
-    },
-    "total": {
-      "type": "number",
-      "description": "Total matching tasks"
-    },
-    "hasMore": {
-      "type": "boolean"
-    }
-  },
-  "required": ["tasks", "total", "hasMore"]
-}
-```
-
-**Example**:
-```typescript
-const result = await bus.invoke('mem:query')(JSON.stringify({
-  status: 'completed',
-  fromDate: Date.now() - 7 * 24 * 60 * 60 * 1000, // Last 7 days
-  limit: 10
-}));
-
-const { tasks, total } = JSON.parse(result);
-console.log(`Found ${total} completed tasks in the last week`);
-```
-
-### mem:retrieve
-
-**Description**: Semantic retrieval using vector similarity (upper layer).
-
-**Input Schema**:
-```json
-{
-  "type": "object",
-  "properties": {
-    "query": {
-      "type": "string",
-      "description": "Natural language query"
-    },
-    "limit": {
-      "type": "number",
-      "description": "Maximum results to return",
-      "default": 5
-    },
-    "minRelevance": {
-      "type": "number",
-      "description": "Minimum relevance score (0-1)",
-      "default": 0.7
-    }
-  },
-  "required": ["query"]
-}
-```
-
-**Output Schema**:
-```json
-{
-  "type": "object",
-  "properties": {
-    "chunks": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "content": { "type": "string" },
-          "relevance": { "type": "number" },
-          "source": {
-            "type": "object",
-            "properties": {
-              "taskId": { "type": "string" },
-              "timestamp": { "type": "number" }
-            }
-          }
-        }
-      }
-    }
-  },
-  "required": ["chunks"]
-}
-```
-
-**Example**:
-```typescript
-const result = await bus.invoke('mem:retrieve')(JSON.stringify({
-  query: 'How did we analyze Q1 sales?',
-  limit: 5
-}));
-
-const { chunks } = JSON.parse(result);
-chunks.forEach(chunk => {
-  console.log(`[${chunk.relevance.toFixed(2)}] ${chunk.content}`);
-  console.log(`  Source: task ${chunk.source.taskId}\n`);
-});
-```
-
 ### mem:archive
 
-**Description**: Archive a task to the upper layer (extract knowledge and build graph).
+**Description**: Archive a completed task from Ledger into Memory's knowledge graph.
 
 **Input Schema**:
 ```json
@@ -259,7 +141,7 @@ chunks.forEach(chunk => {
   "properties": {
     "taskId": {
       "type": "string",
-      "description": "Task to archive"
+      "description": "Ledger task ID to archive"
     }
   },
   "required": ["taskId"]
@@ -285,19 +167,95 @@ const result = await bus.invoke('mem:archive')(JSON.stringify({
   taskId: 'task-abc123'
 }));
 
-// { "success": true, "nodesCreated": 12, "edgesCreated": 18 }
+const { nodesCreated, edgesCreated } = JSON.parse(result);
+console.log(`Extracted ${nodesCreated} nodes, ${edgesCreated} edges`);
 ```
 
 **Process**:
-1. Load task from lower layer
-2. Use LLM to extract knowledge nodes (concepts, facts, procedures)
-3. Generate embeddings for each node
-4. Identify relationships between nodes
-5. Store nodes in Chroma + Neo4j
+1. Load task from Ledger (via `ldg:task:get`)
+2. Load all messages (via `ldg:msg:list`)
+3. Use LLM to extract knowledge nodes and relationships
+4. Generate embeddings for each node
+5. Store nodes in Chroma and Neo4j
+6. Create edges in Neo4j
+
+### mem:retrieve
+
+**Description**: Semantic search for relevant knowledge using vector similarity.
+
+**Input Schema**:
+```json
+{
+  "type": "object",
+  "properties": {
+    "query": {
+      "type": "string",
+      "description": "Natural language query"
+    },
+    "limit": {
+      "type": "number",
+      "description": "Maximum results",
+      "default": 5
+    },
+    "minRelevance": {
+      "type": "number",
+      "description": "Minimum relevance score (0-1)",
+      "default": 0.7
+    },
+    "nodeTypes": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Filter by node types"
+    }
+  },
+  "required": ["query"]
+}
+```
+
+**Output Schema**:
+```json
+{
+  "type": "object",
+  "properties": {
+    "nodes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "content": { "type": "string" },
+          "type": { "type": "string" },
+          "relevance": { "type": "number" },
+          "source": {
+            "type": "object",
+            "properties": {
+              "taskId": { "type": "string" }
+            }
+          }
+        }
+      }
+    }
+  },
+  "required": ["nodes"]
+}
+```
+
+**Example**:
+```typescript
+const result = await bus.invoke('mem:retrieve')(JSON.stringify({
+  query: 'How to calculate sales growth?',
+  limit: 5,
+  nodeTypes: ['procedure', 'concept']
+}));
+
+const { nodes } = JSON.parse(result);
+for (const node of nodes) {
+  console.log(`[${node.relevance.toFixed(2)}] ${node.content}`);
+}
+```
 
 ### mem:graph
 
-**Description**: Traverse the knowledge graph starting from specific nodes.
+**Description**: Traverse knowledge graph starting from specific nodes.
 
 **Input Schema**:
 ```json
@@ -312,7 +270,8 @@ const result = await bus.invoke('mem:archive')(JSON.stringify({
     "strategy": {
       "type": "string",
       "enum": ["bfs", "dfs"],
-      "description": "Traversal strategy"
+      "description": "Traversal strategy",
+      "default": "bfs"
     },
     "maxDepth": {
       "type": "number",
@@ -336,32 +295,11 @@ const result = await bus.invoke('mem:archive')(JSON.stringify({
   "properties": {
     "nodes": {
       "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "id": { "type": "string" },
-          "type": { "type": "string" },
-          "content": { "type": "string" },
-          "source": {
-            "type": "object",
-            "properties": {
-              "taskId": { "type": "string" }
-            }
-          }
-        }
-      }
+      "items": { "type": "object" }
     },
     "edges": {
       "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "from": { "type": "string" },
-          "to": { "type": "string" },
-          "type": { "type": "string" },
-          "weight": { "type": "number" }
-        }
-      }
+      "items": { "type": "object" }
     }
   },
   "required": ["nodes", "edges"]
@@ -370,17 +308,16 @@ const result = await bus.invoke('mem:archive')(JSON.stringify({
 
 **Example**:
 ```typescript
-// First, retrieve relevant starting points
+// First, find relevant nodes
 const retrieveResult = await bus.invoke('mem:retrieve')(JSON.stringify({
   query: 'sales analysis methods'
 }));
 
-const startNodeIds = JSON.parse(retrieveResult).chunks.map(c => c.nodeId);
+const startNodeIds = JSON.parse(retrieveResult).nodes.map(n => n.id);
 
 // Then traverse graph from those nodes
 const graphResult = await bus.invoke('mem:graph')(JSON.stringify({
   startNodeIds,
-  strategy: 'bfs',
   maxDepth: 2
 }));
 
@@ -388,301 +325,124 @@ const { nodes, edges } = JSON.parse(graphResult);
 console.log(`Found ${nodes.length} related knowledge nodes`);
 ```
 
-## Knowledge Graph Structure
+### mem:related
 
-### Node Types
+**Description**: Find tasks related to a given task by semantic similarity and graph proximity.
 
-```typescript
-type KnowledgeNodeType = 
-  | 'concept'        // Abstract concept (e.g., "regression analysis")
-  | 'fact'           // Concrete fact (e.g., "Q1 sales were $1.2M")
-  | 'procedure'      // How-to knowledge (e.g., "steps to clean data")
-  | 'question'       // User question
-  | 'answer';        // Assistant answer
-
-type KnowledgeNode = {
-  id: string;
-  type: KnowledgeNodeType;
-  content: string;                      // Text content
-  embedding: number[];                  // Vector representation
-  
-  source: {
-    taskId: string;
-    timestamp: number;
-  };
-  
-  metadata: {
-    extractedBy: string;                // 'llm' or 'rule'
-    confidence?: number;                // 0-1
-  };
-};
-```
-
-### Edge Types
-
-```typescript
-type KnowledgeEdgeType = 
-  | 'related_to'      // General semantic relation
-  | 'followed_by'     // Temporal/causal sequence
-  | 'contradicts'     // Conflicting information
-  | 'derived_from'    // Logical derivation
-  | 'part_of'         // Hierarchical containment
-  | 'answered_by';    // Question-answer link
-
-type KnowledgeEdge = {
-  id: string;
-  type: KnowledgeEdgeType;
-  from: string;                         // Source node ID
-  to: string;                           // Target node ID
-  weight: number;                       // 0-1, edge strength
-  
-  metadata?: {
-    createdBy: string;
-    reason?: string;
-  };
-};
-```
-
-## Storage Implementation
-
-### Lower Layer - File System
-
-```typescript
-type LowerMemory = {
-  storagePath: string;                  // Base directory
-};
-
-const createLowerMemory = (storagePath: string): LowerMemory => {
-  // Ensure directory exists
-  if (!fs.existsSync(storagePath)) {
-    fs.mkdirSync(storagePath, { recursive: true });
-  }
-  
-  return { storagePath };
-};
-
-// Save task
-async function saveTask(lower: LowerMemory, task: Task): Promise<string> {
-  const filePath = path.join(lower.storagePath, `${task.id}.json`);
-  await fs.promises.writeFile(filePath, JSON.stringify(task, null, 2));
-  return filePath;
-}
-
-// Load task
-async function loadTask(lower: LowerMemory, taskId: string): Promise<Task | undefined> {
-  const filePath = path.join(lower.storagePath, `${taskId}.json`);
-  
-  try {
-    const content = await fs.promises.readFile(filePath, 'utf-8');
-    return JSON.parse(content);
-  } catch (error) {
-    if (error.code === 'ENOENT') {
-      return undefined;
-    }
-    throw error;
-  }
-}
-
-// Query tasks
-async function queryTasks(
-  lower: LowerMemory,
-  filter: { status?: string; fromDate?: number; toDate?: number; limit?: number }
-): Promise<Task[]> {
-  const files = await fs.promises.readdir(lower.storagePath);
-  const tasks: Task[] = [];
-  
-  for (const file of files) {
-    if (!file.endsWith('.json')) continue;
-    
-    const taskId = file.replace('.json', '');
-    const task = await loadTask(lower, taskId);
-    
-    if (!task) continue;
-    
-    // Apply filters
-    if (filter.status && task.status !== filter.status) continue;
-    if (filter.fromDate && task.createdAt < filter.fromDate) continue;
-    if (filter.toDate && task.createdAt > filter.toDate) continue;
-    
-    tasks.push(task);
-  }
-  
-  // Sort by createdAt descending
-  tasks.sort((a, b) => b.createdAt - a.createdAt);
-  
-  // Apply limit
-  return filter.limit ? tasks.slice(0, filter.limit) : tasks;
-}
-```
-
-### Upper Layer - Chroma (Vector Store)
-
-```typescript
-import { ChromaClient } from 'chromadb';
-
-type VectorStore = {
-  client: ChromaClient;
-  collection: string;
-};
-
-const createVectorStore = async (
-  endpoint: string,
-  collectionName: string
-): Promise<VectorStore> => {
-  const client = new ChromaClient({ path: endpoint });
-  
-  // Get or create collection
-  await client.getOrCreateCollection({
-    name: collectionName,
-    metadata: { description: 'Agent OS knowledge base' }
-  });
-  
-  return { client, collection: collectionName };
-};
-
-// Add knowledge node
-async function addKnowledgeNode(
-  store: VectorStore,
-  node: KnowledgeNode,
-  bus: AgentBus
-): Promise<void> {
-  const collection = await store.client.getCollection({ name: store.collection });
-  
-  // Generate embedding if not provided
-  if (!node.embedding || node.embedding.length === 0) {
-    const embedResult = await bus.invoke('model:embed')(JSON.stringify({
-      text: node.content
-    }));
-    node.embedding = JSON.parse(embedResult).embedding;
-  }
-  
-  // Add to Chroma
-  await collection.add({
-    ids: [node.id],
-    embeddings: [node.embedding],
-    documents: [node.content],
-    metadatas: [{
-      type: node.type,
-      taskId: node.source.taskId,
-      timestamp: node.source.timestamp
-    }]
-  });
-}
-
-// Vector similarity search
-async function vectorSearch(
-  store: VectorStore,
-  queryEmbedding: number[],
-  limit: number = 5
-): Promise<KnowledgeNode[]> {
-  const collection = await store.client.getCollection({ name: store.collection });
-  
-  const results = await collection.query({
-    queryEmbeddings: [queryEmbedding],
-    nResults: limit
-  });
-  
-  // Convert to KnowledgeNode format
-  return results.ids[0].map((id, i) => ({
-    id,
-    type: results.metadatas![0][i].type as KnowledgeNodeType,
-    content: results.documents![0][i],
-    embedding: queryEmbedding,
-    source: {
-      taskId: results.metadatas![0][i].taskId as string,
-      timestamp: results.metadatas![0][i].timestamp as number
+**Input Schema**:
+```json
+{
+  "type": "object",
+  "properties": {
+    "taskId": {
+      "type": "string",
+      "description": "Reference task ID"
     },
-    metadata: {
-      extractedBy: 'llm',
-      confidence: 1 - (results.distances![0][i] || 0)
+    "limit": {
+      "type": "number",
+      "default": 5
     }
-  }));
+  },
+  "required": ["taskId"]
 }
 ```
 
-### Upper Layer - Neo4j (Graph Store)
-
-```typescript
-import neo4j from 'neo4j-driver';
-
-type GraphStore = {
-  driver: neo4j.Driver;
-};
-
-const createGraphStore = (
-  endpoint: string,
-  username: string,
-  password: string
-): GraphStore => {
-  const driver = neo4j.driver(endpoint, neo4j.auth.basic(username, password));
-  return { driver };
-};
-
-// Add knowledge edge
-async function addKnowledgeEdge(
-  store: GraphStore,
-  edge: KnowledgeEdge
-): Promise<void> {
-  const session = store.driver.session();
-  
-  try {
-    await session.run(
-      `MATCH (a:KnowledgeNode {id: $fromId})
-       MATCH (b:KnowledgeNode {id: $toId})
-       CREATE (a)-[r:${edge.type.toUpperCase()} {weight: $weight}]->(b)
-       RETURN r`,
-      {
-        fromId: edge.from,
-        toId: edge.to,
-        weight: edge.weight
+**Output Schema**:
+```json
+{
+  "type": "object",
+  "properties": {
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "taskId": { "type": "string" },
+          "similarity": { "type": "number" },
+          "sharedNodes": { "type": "number" }
+        }
       }
-    );
-  } finally {
-    await session.close();
-  }
-}
-
-// Graph traversal (BFS)
-async function traverseGraph(
-  store: GraphStore,
-  startNodeIds: string[],
-  maxDepth: number = 3
-): Promise<{ nodes: KnowledgeNode[]; edges: KnowledgeEdge[] }> {
-  const session = store.driver.session();
-  
-  try {
-    const result = await session.run(
-      `MATCH path = (start:KnowledgeNode)-[*1..${maxDepth}]-(connected)
-       WHERE start.id IN $startIds
-       RETURN nodes(path) as nodes, relationships(path) as edges`,
-      { startIds: startNodeIds }
-    );
-    
-    // Process results...
-    const nodes: KnowledgeNode[] = [];
-    const edges: KnowledgeEdge[] = [];
-    
-    // Extract unique nodes and edges
-    // ...
-    
-    return { nodes, edges };
-  } finally {
-    await session.close();
-  }
+    }
+  },
+  "required": ["tasks"]
 }
 ```
 
-## Archiving Process
+**Example**:
+```typescript
+const result = await bus.invoke('mem:related')(JSON.stringify({
+  taskId: 'task-abc123',
+  limit: 5
+}));
 
-When `mem:archive` is invoked, the following process extracts knowledge:
+const { tasks } = JSON.parse(result);
+for (const task of tasks) {
+  console.log(`Task ${task.taskId}: ${task.similarity.toFixed(2)} similarity`);
+}
+```
+
+## Integration with Ledger
+
+Memory reads from Ledger to access complete task records:
+
+### Reading Tasks
 
 ```typescript
-async function archiveTask(taskId: string, bus: AgentBus): Promise<{ nodesCreated: number; edgesCreated: number }> {
-  // 1. Load task from lower layer
-  const task = await loadTask(lowerMemory, taskId);
-  if (!task) throw new Error(`Task not found: ${taskId}`);
+const loadTaskFromLedger = async (
+  taskId: string,
+  bus: AgentBus
+): Promise<{ task: Task; messages: Message[] }> => {
+  // Get task
+  const taskResult = await bus.invoke('ldg:task:get')(
+    JSON.stringify({ taskId })
+  );
+  const { task } = JSON.parse(taskResult);
   
-  // 2. Use LLM to extract knowledge
+  // Get messages
+  const msgResult = await bus.invoke('ldg:msg:list')(
+    JSON.stringify({ taskId })
+  );
+  const { messages } = JSON.parse(msgResult);
+  
+  return { task, messages };
+};
+```
+
+### Archiving Trigger
+
+Tasks are typically archived to Memory when they complete:
+
+```typescript
+// In Task Manager, when task completes:
+const completeTask = async (
+  taskId: string,
+  bus: AgentBus
+): Promise<void> => {
+  // Update task status in Ledger
+  const task = await loadTask(taskId, bus);
+  task.completionStatus = 'success';
+  task.updatedAt = Date.now();
+  await bus.invoke('ldg:task:save')(JSON.stringify({ task }));
+  
+  // Archive to Memory (async, non-blocking)
+  bus.invoke('mem:archive')(JSON.stringify({ taskId }))
+    .catch(err => console.error('Archive failed:', err));
+};
+```
+
+## Knowledge Extraction
+
+### Extraction Process
+
+```typescript
+const extractKnowledge = async (
+  taskId: string,
+  bus: AgentBus
+): Promise<{ nodes: KnowledgeNode[]; edges: KnowledgeEdge[] }> => {
+  // 1. Load task from Ledger
+  const { task, messages } = await loadTaskFromLedger(taskId, bus);
+  
+  // 2. Build extraction prompt
   const extractionPrompt = {
     messages: [
       {
@@ -695,196 +455,482 @@ async function archiveTask(taskId: string, bus: AgentBus): Promise<{ nodesCreate
       {
         role: 'user',
         content: JSON.stringify({
-          goal: task.goal,
-          messages: task.context
+          goal: task.systemPrompt,
+          conversation: messages.map(m => ({
+            role: m.role,
+            content: m.content
+          }))
         })
       }
     ]
   };
   
-  const llmStream = bus.invokeStream('model:llm')(JSON.stringify(extractionPrompt));
+  // 3. Call LLM for extraction
+  const llmResult = await bus.invoke('model:llm')(
+    JSON.stringify(extractionPrompt)
+  );
   
-  let fullResponse = '';
-  for await (const chunk of llmStream) {
-    const data = JSON.parse(chunk);
-    if (data.content) fullResponse += data.content;
-  }
+  const extraction = JSON.parse(llmResult);
   
-  const { nodes, edges } = JSON.parse(fullResponse);
+  // 4. Generate embeddings for nodes
+  const nodes: KnowledgeNode[] = await Promise.all(
+    extraction.nodes.map(async (nodeData: any) => {
+      const embedResult = await bus.invoke('model:embed')(
+        JSON.stringify({ text: nodeData.content })
+      );
+      const { embedding } = JSON.parse(embedResult);
+      
+      return {
+        id: generateId(),
+        type: nodeData.type,
+        content: nodeData.content,
+        embedding,
+        source: {
+          taskId: task.id,
+          timestamp: task.updatedAt
+        },
+        metadata: {
+          extractedBy: 'llm',
+          confidence: nodeData.confidence || 0.8
+        }
+      };
+    })
+  );
   
-  // 3. Add nodes to vector store
-  for (const nodeData of nodes) {
-    const node: KnowledgeNode = {
-      id: generateId(),
-      type: nodeData.type,
-      content: nodeData.content,
-      embedding: [],
-      source: {
-        taskId: task.id,
-        timestamp: task.completedAt || task.updatedAt
-      },
-      metadata: { extractedBy: 'llm' }
-    };
-    
-    await addKnowledgeNode(vectorStore, node, bus);
-  }
+  // 5. Create edges
+  const edges: KnowledgeEdge[] = extraction.edges.map((edgeData: any) => ({
+    id: generateId(),
+    type: edgeData.type,
+    from: findNodeId(edgeData.from, nodes),
+    to: findNodeId(edgeData.to, nodes),
+    weight: edgeData.weight || 1.0,
+    metadata: {
+      createdBy: 'llm',
+      reason: edgeData.reason
+    }
+  }));
   
-  // 4. Add edges to graph store
-  for (const edgeData of edges) {
-    const edge: KnowledgeEdge = {
-      id: generateId(),
-      type: edgeData.type,
-      from: edgeData.from,
-      to: edgeData.to,
-      weight: edgeData.weight || 1.0,
-      metadata: { createdBy: 'llm' }
-    };
-    
-    await addKnowledgeEdge(graphStore, edge);
-  }
-  
-  return { nodesCreated: nodes.length, edgesCreated: edges.length };
+  return { nodes, edges };
+};
+```
+
+### Prompt Design
+
+The extraction prompt should guide the LLM to:
+- Identify key concepts discussed
+- Extract concrete facts and data points
+- Recognize procedural knowledge (how-to steps)
+- Detect questions and their answers
+- Establish relationships between knowledge units
+
+Example extraction output:
+
+```json
+{
+  "nodes": [
+    {
+      "type": "concept",
+      "content": "Sales growth analysis",
+      "confidence": 0.9
+    },
+    {
+      "type": "fact",
+      "content": "Q1 2024 sales were $1.2M",
+      "confidence": 1.0
+    },
+    {
+      "type": "procedure",
+      "content": "Calculate growth: (current - previous) / previous * 100",
+      "confidence": 0.95
+    }
+  ],
+  "edges": [
+    {
+      "type": "part_of",
+      "from": "Q1 2024 sales were $1.2M",
+      "to": "Sales growth analysis",
+      "weight": 0.8
+    },
+    {
+      "type": "derived_from",
+      "from": "Calculate growth: (current - previous) / previous * 100",
+      "to": "Sales growth analysis",
+      "weight": 0.9
+    }
+  ]
 }
 ```
 
-## Memory Abilities Registration
+## Vector Store (Chroma)
+
+### Storage
 
 ```typescript
-function registerMemoryAbilities(
-  lowerMemory: LowerMemory,
-  vectorStore: VectorStore,
-  graphStore: GraphStore,
+import { ChromaClient } from 'chromadb';
+
+type VectorStore = {
+  client: ChromaClient;
+  collection: string;
+};
+
+const createVectorStore = async (): Promise<VectorStore> => {
+  const client = new ChromaClient({
+    path: process.env.CHROMA_ENDPOINT || 'http://localhost:8000'
+  });
+  
+  await client.getOrCreateCollection({
+    name: 'agent-os-knowledge',
+    metadata: { description: 'Agent OS knowledge base' }
+  });
+  
+  return { client, collection: 'agent-os-knowledge' };
+};
+```
+
+### Adding Nodes
+
+```typescript
+const addNodesToChroma = async (
+  nodes: KnowledgeNode[],
+  store: VectorStore
+): Promise<void> => {
+  const collection = await store.client.getCollection({
+    name: store.collection
+  });
+  
+  await collection.add({
+    ids: nodes.map(n => n.id),
+    embeddings: nodes.map(n => n.embedding),
+    documents: nodes.map(n => n.content),
+    metadatas: nodes.map(n => ({
+      type: n.type,
+      taskId: n.source.taskId,
+      timestamp: n.source.timestamp,
+      confidence: n.metadata.confidence || 0.8
+    }))
+  });
+};
+```
+
+### Semantic Search
+
+```typescript
+const semanticSearch = async (
+  query: string,
+  limit: number,
+  store: VectorStore,
   bus: AgentBus
-): void {
-  // mem:save
-  bus.register(
-    {
-      id: 'mem:save',
-      moduleName: 'mem',
-      abilityName: 'save',
-      description: 'Save task to storage',
-      isStream: false,
-      inputSchema: { /* ... */ },
-      outputSchema: { /* ... */ }
+): Promise<KnowledgeNode[]> => {
+  // Generate query embedding
+  const embedResult = await bus.invoke('model:embed')(
+    JSON.stringify({ text: query })
+  );
+  const { embedding } = JSON.parse(embedResult);
+  
+  // Search Chroma
+  const collection = await store.client.getCollection({
+    name: store.collection
+  });
+  
+  const results = await collection.query({
+    queryEmbeddings: [embedding],
+    nResults: limit
+  });
+  
+  // Convert to KnowledgeNode format
+  return results.ids[0].map((id, i) => ({
+    id,
+    type: results.metadatas![0][i].type as KnowledgeNodeType,
+    content: results.documents![0][i],
+    embedding,
+    source: {
+      taskId: results.metadatas![0][i].taskId as string,
+      timestamp: results.metadatas![0][i].timestamp as number
     },
-    async (input: string) => {
-      const { task } = JSON.parse(input);
-      const path = await saveTask(lowerMemory, task);
-      return JSON.stringify({ success: true, taskId: task.id, path });
+    metadata: {
+      extractedBy: 'llm',
+      confidence: 1 - (results.distances![0][i] || 0)
     }
+  }));
+};
+```
+
+## Graph Store (Neo4j)
+
+### Storage
+
+```typescript
+import neo4j from 'neo4j-driver';
+
+type GraphStore = {
+  driver: neo4j.Driver;
+};
+
+const createGraphStore = (): GraphStore => {
+  const driver = neo4j.driver(
+    process.env.NEO4J_URI || 'bolt://localhost:7687',
+    neo4j.auth.basic(
+      process.env.NEO4J_USER || 'neo4j',
+      process.env.NEO4J_PASSWORD || 'password'
+    )
   );
   
-  // mem:query
-  bus.register(
-    {
-      id: 'mem:query',
-      moduleName: 'mem',
-      abilityName: 'query',
-      description: 'Query historical tasks',
-      isStream: false,
-      inputSchema: { /* ... */ },
-      outputSchema: { /* ... */ }
-    },
-    async (input: string) => {
-      const filter = JSON.parse(input);
-      const tasks = await queryTasks(lowerMemory, filter);
-      return JSON.stringify({
-        tasks: tasks.map(summarizeTask),
-        total: tasks.length,
-        hasMore: false
-      });
-    }
-  );
+  return { driver };
+};
+```
+
+### Adding Nodes and Edges
+
+```typescript
+const addNodesToNeo4j = async (
+  nodes: KnowledgeNode[],
+  store: GraphStore
+): Promise<void> => {
+  const session = store.driver.session();
   
-  // mem:retrieve
-  bus.register(
-    {
-      id: 'mem:retrieve',
-      moduleName: 'mem',
-      abilityName: 'retrieve',
-      description: 'Semantic retrieval via vector similarity',
-      isStream: false,
-      inputSchema: { /* ... */ },
-      outputSchema: { /* ... */ }
-    },
-    async (input: string) => {
-      const { query, limit, minRelevance } = JSON.parse(input);
-      
-      // Generate query embedding
-      const embedResult = await bus.invoke('model:embed')(JSON.stringify({ text: query }));
-      const { embedding } = JSON.parse(embedResult);
-      
-      // Search
-      const nodes = await vectorSearch(vectorStore, embedding, limit);
-      
-      // Filter by relevance
-      const chunks = nodes
-        .filter(n => n.metadata.confidence! >= (minRelevance || 0.7))
-        .map(n => ({
-          content: n.content,
-          relevance: n.metadata.confidence!,
-          source: n.source
-        }));
-      
-      return JSON.stringify({ chunks });
+  try {
+    for (const node of nodes) {
+      await session.run(
+        `CREATE (n:KnowledgeNode {
+          id: $id,
+          type: $type,
+          content: $content,
+          taskId: $taskId,
+          timestamp: $timestamp
+        })`,
+        {
+          id: node.id,
+          type: node.type,
+          content: node.content,
+          taskId: node.source.taskId,
+          timestamp: node.source.timestamp
+        }
+      );
     }
-  );
+  } finally {
+    await session.close();
+  }
+};
+
+const addEdgesToNeo4j = async (
+  edges: KnowledgeEdge[],
+  store: GraphStore
+): Promise<void> => {
+  const session = store.driver.session();
   
-  // mem:archive, mem:graph...
-}
+  try {
+    for (const edge of edges) {
+      await session.run(
+        `MATCH (a:KnowledgeNode {id: $fromId})
+         MATCH (b:KnowledgeNode {id: $toId})
+         CREATE (a)-[r:${edge.type.toUpperCase()} {weight: $weight}]->(b)`,
+        {
+          fromId: edge.from,
+          toId: edge.to,
+          weight: edge.weight
+        }
+      );
+    }
+  } finally {
+    await session.close();
+  }
+};
+```
+
+### Graph Traversal
+
+```typescript
+const traverseGraph = async (
+  startNodeIds: string[],
+  maxDepth: number,
+  store: GraphStore
+): Promise<{ nodes: KnowledgeNode[]; edges: KnowledgeEdge[] }> => {
+  const session = store.driver.session();
+  
+  try {
+    const result = await session.run(
+      `MATCH path = (start:KnowledgeNode)-[*1..${maxDepth}]-(connected)
+       WHERE start.id IN $startIds
+       RETURN nodes(path) as nodes, relationships(path) as edges`,
+      { startIds: startNodeIds }
+    );
+    
+    // Process results into nodes and edges
+    const nodesMap = new Map<string, KnowledgeNode>();
+    const edgesMap = new Map<string, KnowledgeEdge>();
+    
+    for (const record of result.records) {
+      const pathNodes = record.get('nodes');
+      const pathEdges = record.get('edges');
+      
+      // Extract nodes
+      for (const node of pathNodes) {
+        if (!nodesMap.has(node.properties.id)) {
+          nodesMap.set(node.properties.id, {
+            id: node.properties.id,
+            type: node.properties.type,
+            content: node.properties.content,
+            embedding: [],
+            source: {
+              taskId: node.properties.taskId,
+              timestamp: node.properties.timestamp
+            },
+            metadata: { extractedBy: 'llm' }
+          });
+        }
+      }
+      
+      // Extract edges
+      for (const edge of pathEdges) {
+        const edgeId = `${edge.start}-${edge.type}-${edge.end}`;
+        if (!edgesMap.has(edgeId)) {
+          edgesMap.set(edgeId, {
+            id: edgeId,
+            type: edge.type.toLowerCase(),
+            from: edge.start.toString(),
+            to: edge.end.toString(),
+            weight: edge.properties.weight || 1.0
+          });
+        }
+      }
+    }
+    
+    return {
+      nodes: Array.from(nodesMap.values()),
+      edges: Array.from(edgesMap.values())
+    };
+  } finally {
+    await session.close();
+  }
+};
 ```
 
 ## Testing Strategy
 
+### Unit Tests
+
 ```typescript
-test('mem:save persists task to file system', async () => {
-  const bus = createAgentBus();
-  const memory = createMemory(bus, { storagePath: '/tmp/test-tasks' });
+test('mem:archive extracts knowledge from task', async () => {
+  const bus = createMockBus();
+  const memory = createMemory(bus);
   
-  const task = {
-    id: 'task-test',
-    goal: 'Test task',
-    status: 'completed',
-    context: [],
-    createdAt: Date.now()
-  };
+  // Mock Ledger responses
+  bus.mockAbility('ldg:task:get', async () => JSON.stringify({
+    task: { id: 'task-test', /* ... */ }
+  }));
   
-  const result = await bus.invoke('mem:save')(JSON.stringify({ task }));
-  const { success, path } = JSON.parse(result);
+  bus.mockAbility('ldg:msg:list', async () => JSON.stringify({
+    messages: [/* ... */]
+  }));
   
-  expect(success).toBe(true);
-  expect(fs.existsSync(path)).toBe(true);
+  // Archive task
+  const result = await bus.invoke('mem:archive')(JSON.stringify({
+    taskId: 'task-test'
+  }));
+  
+  const { nodesCreated, edgesCreated } = JSON.parse(result);
+  expect(nodesCreated).toBeGreaterThan(0);
+  expect(edgesCreated).toBeGreaterThan(0);
 });
 
 test('mem:retrieve finds semantically similar content', async () => {
   const bus = createAgentBus();
-  const memory = createMemory(bus, { /* ... */ });
+  const memory = createMemory(bus);
   
-  // Archive a task with known content
-  await bus.invoke('mem:archive')(JSON.stringify({ taskId: 'task-with-sales-data' }));
+  // Add some knowledge nodes
+  await archiveTestTask(bus);
   
   // Query for related content
   const result = await bus.invoke('mem:retrieve')(JSON.stringify({
-    query: 'How do we analyze sales?',
+    query: 'How to analyze sales?',
     limit: 3
   }));
   
-  const { chunks } = JSON.parse(result);
-  expect(chunks.length).toBeGreaterThan(0);
-  expect(chunks[0].relevance).toBeGreaterThan(0.7);
+  const { nodes } = JSON.parse(result);
+  expect(nodes.length).toBeGreaterThan(0);
+  expect(nodes[0].relevance).toBeGreaterThan(0.7);
 });
 ```
 
+### Integration Tests
+
+```typescript
+test('Full archiving flow from Ledger to Memory', async () => {
+  const bus = createAgentBus();
+  const ledger = createLedger(bus);
+  const memory = createMemory(bus);
+  
+  // Create and complete task in Ledger
+  const taskId = await createTestTask(bus);
+  await completeTestTask(taskId, bus);
+  
+  // Archive to Memory
+  await bus.invoke('mem:archive')(JSON.stringify({ taskId }));
+  
+  // Verify in Chroma
+  const retrieveResult = await bus.invoke('mem:retrieve')(JSON.stringify({
+    query: 'test task content'
+  }));
+  
+  const { nodes } = JSON.parse(retrieveResult);
+  expect(nodes.some(n => n.source.taskId === taskId)).toBe(true);
+  
+  // Verify in Neo4j
+  const graphResult = await bus.invoke('mem:graph')(JSON.stringify({
+    startNodeIds: [nodes[0].id],
+    maxDepth: 1
+  }));
+  
+  const { edges } = JSON.parse(graphResult);
+  expect(edges.length).toBeGreaterThan(0);
+});
+```
+
+## Performance Considerations
+
+### Lazy Archiving
+
+Archive tasks asynchronously to avoid blocking task completion:
+
+```typescript
+// Non-blocking archive
+bus.invoke('mem:archive')(JSON.stringify({ taskId }))
+  .catch(err => console.error('Archive failed:', err));
+```
+
+### Batch Processing
+
+Archive multiple tasks in batches:
+
+```typescript
+const batchArchive = async (
+  taskIds: string[],
+  bus: AgentBus
+): Promise<void> => {
+  await Promise.all(
+    taskIds.map(id => 
+      bus.invoke('mem:archive')(JSON.stringify({ taskId: id }))
+    )
+  );
+};
+```
+
+### Index Optimization
+
+- **Chroma**: Use appropriate distance metrics (cosine similarity for text)
+- **Neo4j**: Create indexes on frequently queried properties
+- **Caching**: Cache frequently accessed knowledge nodes
+
 ## Summary
 
-The Memory module provides:
+Memory provides:
 
-✅ **Dual-layer storage** - complete records + semantic index
-✅ **Vector similarity search** via Chroma
-✅ **Knowledge graph** via Neo4j
-✅ **Automatic archiving** with LLM-based knowledge extraction
-✅ **Graph traversal** for discovering related knowledge
-✅ **Full audit trail** with complete task history
+✅ **Semantic knowledge extraction** from complete task history  
+✅ **Vector similarity search** for intelligent retrieval  
+✅ **Knowledge graph traversal** for relationship discovery  
+✅ **Optional enhancement layer** that doesn't block core Agent functionality  
+✅ **Dual storage strategy** combining vectors and graphs  
+✅ **LLM-powered extraction** for automatic knowledge discovery  
+✅ **Integration with Ledger** for complete task access
 
-As the storage layer, Memory enables Agent OS to learn from past interactions and provide contextually relevant responses.
-
+As the intelligence layer above Ledger, Memory enables Agent OS to learn from experience and provide contextually relevant responses based on accumulated knowledge.
