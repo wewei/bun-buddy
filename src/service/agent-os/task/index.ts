@@ -1,9 +1,9 @@
 // Task Manager
+import { registerTaskAbilities } from './abilities';
+import { createExecuteTask } from './runloop';
 
 import type { AgentBus } from '../types';
 import type { TaskRegistry } from './types';
-import { registerTaskAbilities } from './abilities';
-import { createExecuteTask } from './runloop';
 
 export type TaskManager = {
   registry: TaskRegistry;
