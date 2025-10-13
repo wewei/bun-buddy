@@ -90,7 +90,6 @@ type LedgerMsgListOutput = z.infer<typeof LEDGER_MSG_LIST_OUTPUT_SCHEMA>;
 
 // Meta definitions
 const LEDGER_TASK_SAVE_META: AbilityMeta<LedgerTaskSaveInput, LedgerTaskSaveOutput> = {
-  id: 'ldg:task:save',
   moduleName: 'ldg',
   abilityName: 'task:save',
   description: 'Save or update a task',
@@ -99,7 +98,6 @@ const LEDGER_TASK_SAVE_META: AbilityMeta<LedgerTaskSaveInput, LedgerTaskSaveOutp
 };
 
 const LEDGER_TASK_GET_META: AbilityMeta<LedgerTaskGetInput, LedgerTaskGetOutput> = {
-  id: 'ldg:task:get',
   moduleName: 'ldg',
   abilityName: 'task:get',
   description: 'Get a task by ID',
@@ -108,7 +106,6 @@ const LEDGER_TASK_GET_META: AbilityMeta<LedgerTaskGetInput, LedgerTaskGetOutput>
 };
 
 const LEDGER_TASK_QUERY_META: AbilityMeta<LedgerTaskQueryInput, LedgerTaskQueryOutput> = {
-  id: 'ldg:task:query',
   moduleName: 'ldg',
   abilityName: 'task:query',
   description: 'Query tasks with filters',
@@ -117,7 +114,6 @@ const LEDGER_TASK_QUERY_META: AbilityMeta<LedgerTaskQueryInput, LedgerTaskQueryO
 };
 
 const LEDGER_CALL_SAVE_META: AbilityMeta<LedgerCallSaveInput, LedgerCallSaveOutput> = {
-  id: 'ldg:call:save',
   moduleName: 'ldg',
   abilityName: 'call:save',
   description: 'Save or update a call',
@@ -126,7 +122,6 @@ const LEDGER_CALL_SAVE_META: AbilityMeta<LedgerCallSaveInput, LedgerCallSaveOutp
 };
 
 const LEDGER_CALL_LIST_META: AbilityMeta<LedgerCallListInput, LedgerCallListOutput> = {
-  id: 'ldg:call:list',
   moduleName: 'ldg',
   abilityName: 'call:list',
   description: 'List calls for a task',
@@ -135,7 +130,6 @@ const LEDGER_CALL_LIST_META: AbilityMeta<LedgerCallListInput, LedgerCallListOutp
 };
 
 const LEDGER_MSG_SAVE_META: AbilityMeta<LedgerMsgSaveInput, LedgerMsgSaveOutput> = {
-  id: 'ldg:msg:save',
   moduleName: 'ldg',
   abilityName: 'msg:save',
   description: 'Save a message (immutable)',
@@ -144,7 +138,6 @@ const LEDGER_MSG_SAVE_META: AbilityMeta<LedgerMsgSaveInput, LedgerMsgSaveOutput>
 };
 
 const LEDGER_MSG_LIST_META: AbilityMeta<LedgerMsgListInput, LedgerMsgListOutput> = {
-  id: 'ldg:msg:list',
   moduleName: 'ldg',
   abilityName: 'msg:list',
   description: 'List messages for a task',
@@ -153,7 +146,7 @@ const LEDGER_MSG_LIST_META: AbilityMeta<LedgerMsgListInput, LedgerMsgListOutput>
 };
 
 const registerTaskSaveAbility = (ledger: Ledger, bus: AgentBus): void => {
-  bus.register(LEDGER_TASK_SAVE_META, async (_taskId, input: LedgerTaskSaveInput) => {
+  bus.register('ldg:task:save', LEDGER_TASK_SAVE_META, async (_callId, _taskId, input: LedgerTaskSaveInput) => {
     const { task } = input as { task: Task };
     await ledger.saveTask(task);
     return { type: 'success', result: { success: true } };
@@ -161,21 +154,21 @@ const registerTaskSaveAbility = (ledger: Ledger, bus: AgentBus): void => {
 };
 
 const registerTaskGetAbility = (ledger: Ledger, bus: AgentBus): void => {
-  bus.register(LEDGER_TASK_GET_META, async (_taskId, input: LedgerTaskGetInput) => {
+  bus.register('ldg:task:get', LEDGER_TASK_GET_META, async (_callId, _taskId, input: LedgerTaskGetInput) => {
     const task = await ledger.getTask(input.taskId);
     return { type: 'success', result: { task } };
   });
 };
 
 const registerTaskQueryAbility = (ledger: Ledger, bus: AgentBus): void => {
-  bus.register(LEDGER_TASK_QUERY_META, async (_taskId, input: LedgerTaskQueryInput) => {
+  bus.register('ldg:task:query', LEDGER_TASK_QUERY_META, async (_callId, _taskId, input: LedgerTaskQueryInput) => {
     const result = await ledger.queryTasks(input);
     return { type: 'success', result };
   });
 };
 
 const registerCallSaveAbility = (ledger: Ledger, bus: AgentBus): void => {
-  bus.register(LEDGER_CALL_SAVE_META, async (_taskId, input: LedgerCallSaveInput) => {
+  bus.register('ldg:call:save', LEDGER_CALL_SAVE_META, async (_callId, _taskId, input: LedgerCallSaveInput) => {
     const { call } = input as { call: Call };
     await ledger.saveCall(call);
     return { type: 'success', result: { success: true } };
@@ -183,14 +176,14 @@ const registerCallSaveAbility = (ledger: Ledger, bus: AgentBus): void => {
 };
 
 const registerCallListAbility = (ledger: Ledger, bus: AgentBus): void => {
-  bus.register(LEDGER_CALL_LIST_META, async (_taskId, input: LedgerCallListInput) => {
+  bus.register('ldg:call:list', LEDGER_CALL_LIST_META, async (_callId, _taskId, input: LedgerCallListInput) => {
     const calls = await ledger.listCalls({ taskId: input.taskId });
     return { type: 'success', result: { calls } };
   });
 };
 
 const registerMsgSaveAbility = (ledger: Ledger, bus: AgentBus): void => {
-  bus.register(LEDGER_MSG_SAVE_META, async (_taskId, input: LedgerMsgSaveInput) => {
+  bus.register('ldg:msg:save', LEDGER_MSG_SAVE_META, async (_callId, _taskId, input: LedgerMsgSaveInput) => {
     const { message } = input as { message: Message };
     const messageId = await ledger.saveMessage(message);
     return { type: 'success', result: { success: true, messageId } };
@@ -198,7 +191,7 @@ const registerMsgSaveAbility = (ledger: Ledger, bus: AgentBus): void => {
 };
 
 const registerMsgListAbility = (ledger: Ledger, bus: AgentBus): void => {
-  bus.register(LEDGER_MSG_LIST_META, async (_taskId, input: LedgerMsgListInput) => {
+  bus.register('ldg:msg:list', LEDGER_MSG_LIST_META, async (_callId, _taskId, input: LedgerMsgListInput) => {
     const result = await ledger.listMessages(input);
     return { type: 'success', result };
   });

@@ -7,7 +7,7 @@ const createInternalHandler = <TInput, TOutput>(
   meta: AbilityMeta<TInput, TOutput>,
   handler: AbilityHandler<TInput, TOutput>
 ): InternalAbilityHandler => {
-  return async (taskId: string, input: string): Promise<InvokeResult<string, string>> => {
+  return async (callId: string, taskId: string, input: string): Promise<InvokeResult<string, string>> => {
     try {
       // Parse JSON
       let jsonData: unknown;
@@ -30,7 +30,7 @@ const createInternalHandler = <TInput, TOutput>(
       }
       
       // Call handler with parsed, typed input
-      const handlerResult = await handler(taskId, parseResult.data);
+      const handlerResult = await handler(callId, taskId, parseResult.data);
       
       // Serialize result
       if (handlerResult.type === 'success') {
@@ -52,15 +52,16 @@ const createInternalHandler = <TInput, TOutput>(
 
 export const registerAbility = <TInput, TOutput>(
   state: BusState,
+  abilityId: string,
   meta: AbilityMeta<TInput, TOutput>,
   handler: AbilityHandler<TInput, TOutput>
 ): void => {
-  if (state.abilities.has(meta.id)) {
-    throw new Error(`Ability already registered: ${meta.id}`);
+  if (state.abilities.has(abilityId)) {
+    throw new Error(`Ability already registered: ${abilityId}`);
   }
   
   const internalHandler = createInternalHandler(meta, handler);
-  state.abilities.set(meta.id, { meta, handler: internalHandler });
+  state.abilities.set(abilityId, { abilityId, meta, handler: internalHandler });
 };
 
 export const unregisterAbility = (state: BusState, abilityId: string): void => {
@@ -101,7 +102,7 @@ export const listAbilitiesForModule = (
   for (const ability of state.abilities.values()) {
     if (ability.meta.moduleName === moduleName) {
       abilities.push({
-        id: ability.meta.id,
+        id: ability.abilityId,
         name: ability.meta.abilityName,
         description: ability.meta.description,
       });

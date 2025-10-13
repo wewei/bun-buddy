@@ -23,7 +23,6 @@ const SHELL_SEND_META: AbilityMeta<
   z.infer<typeof SHELL_SEND_INPUT_SCHEMA>,
   z.infer<typeof SHELL_SEND_OUTPUT_SCHEMA>
 > = {
-  id: 'shell:send',
   moduleName: 'shell',
   abilityName: 'send',
   description: 'Send message chunk to user via SSE',
@@ -67,6 +66,8 @@ const handleShellSend = async (taskId: string, input: ShellSendInput) => {
 };
 
 export const registerShellAbilities = (bus: AgentBus): void => {
-  bus.register(SHELL_SEND_META, handleShellSend);
+  bus.register('shell:send', SHELL_SEND_META, async (_callId, taskId, input) => {
+    return handleShellSend(taskId, input);
+  });
 };
 

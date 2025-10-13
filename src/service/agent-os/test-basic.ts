@@ -37,13 +37,13 @@ const testBasicFunctionality = async () => {
 
   // Test Bus abilities
   console.log('2. Testing Bus abilities...');
-  const modules = unwrapInvokeResult(await agentOS.bus.invoke('bus:list', 'test', '{}'));
+  const modules = unwrapInvokeResult(await agentOS.bus.invoke('bus:list', 'test-call-1', 'test', '{}'));
   const modulesData = JSON.parse(modules) as { modules: Array<{ name: string }> };
   console.log('✓ Modules:', modulesData.modules.map((m) => m.name).join(', '));
 
   // Test Model Manager
   console.log('\n3. Testing Model Manager...');
-  const models = unwrapInvokeResult(await agentOS.bus.invoke('model:listLLM', 'test', '{}'));
+  const models = unwrapInvokeResult(await agentOS.bus.invoke('model:listLLM', 'test-call-2', 'test', '{}'));
   const modelsData = JSON.parse(models) as {
     providers: Array<{ providerName: string; models: string[] }>;
   };
@@ -56,6 +56,7 @@ const testBasicFunctionality = async () => {
   console.log('\n4. Testing Task Manager...');
   const spawnResult = unwrapInvokeResult(await agentOS.bus.invoke(
     'task:spawn',
+    'test-call-3',
     'test',
     JSON.stringify({
       goal: 'Test task - say hello',
@@ -68,7 +69,7 @@ const testBasicFunctionality = async () => {
   await new Promise((resolve) => setTimeout(resolve, 1000));
 
   // Check active tasks
-  const activeTasks = unwrapInvokeResult(await agentOS.bus.invoke('task:active', 'test', '{}'));
+  const activeTasks = unwrapInvokeResult(await agentOS.bus.invoke('task:active', 'test-call-4', 'test', '{}'));
   const activeData = JSON.parse(activeTasks);
   console.log('✓ Active tasks:', activeData.tasks.length);
 

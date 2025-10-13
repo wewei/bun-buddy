@@ -42,6 +42,7 @@ const logInvokeResult = (
 const executeInvoke = async (
   state: BusState,
   abilityId: string,
+  callId: string,
   callerId: string,
   input: string,
   startTime: number,
@@ -56,7 +57,7 @@ const executeInvoke = async (
   // Validation happens inside the handler (createInternalHandler)
   // which can return invalid-input, success, or error
   try {
-    const handlerResult = await ability.handler(callerId, input);
+    const handlerResult = await ability.handler(callId, callerId, input);
     return logInvokeResult(state, logEntry, startTime, handlerResult);
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -72,7 +73,7 @@ export const createAgentBus = (): AgentBus => {
   };
 
   const bus: AgentBus = {
-    invoke: async (abilityId: string, callerId: string, input: string) => {
+    invoke: async (abilityId: string, callId: string, callerId: string, input: string) => {
       const startTime = Date.now();
       const logEntry: CallLogEntry = {
         callerId,
@@ -80,11 +81,11 @@ export const createAgentBus = (): AgentBus => {
         timestamp: startTime,
       };
       
-      return executeInvoke(state, abilityId, callerId, input, startTime, logEntry);
+      return executeInvoke(state, abilityId, callId, callerId, input, startTime, logEntry);
     },
 
-    register: (meta, handler) => {
-      registerAbility(state, meta, handler);
+    register: (abilityId, meta, handler) => {
+      registerAbility(state, abilityId, meta, handler);
     },
 
     unregister: (abilityId: string): void => {

@@ -27,6 +27,7 @@
     "openai": "^6.0.1",
     "ora": "^7.0.1",
     "pm2": "^6.0.13",
+    "uuid": "^11.0.3",
     "zod": "^4.1.12",
     "zod-to-json-schema": "^3.24.6"
   },
@@ -35,6 +36,7 @@
     "@types/bun": "latest",
     "@types/eslint__js": "^8.42.3",
     "@types/lodash": "^4.17.20",
+    "@types/uuid": "^10.0.0",
     "eslint": "^9.15.0",
     "eslint-plugin-import": "^2.31.0",
     "typescript-eslint": "^8.15.0"

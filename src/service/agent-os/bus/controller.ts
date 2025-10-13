@@ -60,7 +60,6 @@ type BusInspectOutput = z.infer<typeof BUS_INSPECT_OUTPUT_SCHEMA>;
 
 // Meta definitions
 const BUS_LIST_META: AbilityMeta<BusListInput, BusListOutput> = {
-  id: 'bus:list',
   moduleName: 'bus',
   abilityName: 'list',
   description: 'List all registered modules',
@@ -69,7 +68,6 @@ const BUS_LIST_META: AbilityMeta<BusListInput, BusListOutput> = {
 };
 
 const BUS_ABILITIES_META: AbilityMeta<BusAbilitiesInput, BusAbilitiesOutput> = {
-  id: 'bus:abilities',
   moduleName: 'bus',
   abilityName: 'abilities',
   description: 'List all abilities for a given module',
@@ -78,7 +76,6 @@ const BUS_ABILITIES_META: AbilityMeta<BusAbilitiesInput, BusAbilitiesOutput> = {
 };
 
 const BUS_SCHEMA_META: AbilityMeta<BusSchemaInput, BusSchemaOutput> = {
-  id: 'bus:schema',
   moduleName: 'bus',
   abilityName: 'schema',
   description: 'Get input and output schemas for an ability',
@@ -87,7 +84,6 @@ const BUS_SCHEMA_META: AbilityMeta<BusSchemaInput, BusSchemaOutput> = {
 };
 
 const BUS_INSPECT_META: AbilityMeta<BusInspectInput, BusInspectOutput> = {
-  id: 'bus:inspect',
   moduleName: 'bus',
   abilityName: 'inspect',
   description: 'Get full metadata for an ability',
@@ -96,21 +92,21 @@ const BUS_INSPECT_META: AbilityMeta<BusInspectInput, BusInspectOutput> = {
 };
 
 const registerListAbility = (state: BusState, bus: AgentBus): void => {
-  bus.register(BUS_LIST_META, async () => {
+  bus.register('bus:list', BUS_LIST_META, async () => {
     const modules = listModules(state);
     return { type: 'success', result: { modules } };
   });
 };
 
 const registerAbilitiesAbility = (state: BusState, bus: AgentBus): void => {
-  bus.register(BUS_ABILITIES_META, async (_taskId, input: BusAbilitiesInput) => {
+  bus.register('bus:abilities', BUS_ABILITIES_META, async (_callId, _taskId, input: BusAbilitiesInput) => {
     const abilities = listAbilitiesForModule(state, input.moduleName);
     return { type: 'success', result: { moduleName: input.moduleName, abilities } };
   });
 };
 
 const registerSchemaAbility = (state: BusState, bus: AgentBus): void => {
-  bus.register(BUS_SCHEMA_META, async (_taskId, input: BusSchemaInput) => {
+  bus.register('bus:schema', BUS_SCHEMA_META, async (_callId, _taskId, input: BusSchemaInput) => {
     const ability = getAbility(state, input.abilityId);
 
     if (!ability) {
@@ -132,7 +128,7 @@ const registerSchemaAbility = (state: BusState, bus: AgentBus): void => {
 };
 
 const registerInspectAbility = (state: BusState, bus: AgentBus): void => {
-  bus.register(BUS_INSPECT_META, async (_taskId, input: BusInspectInput) => {
+  bus.register('bus:inspect', BUS_INSPECT_META, async (_callId, _taskId, input: BusInspectInput) => {
     const ability = getAbility(state, input.abilityId);
 
     if (!ability) {

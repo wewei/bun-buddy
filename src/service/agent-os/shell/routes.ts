@@ -1,9 +1,15 @@
 // Shell HTTP Routes
 
+import { v4 as uuidv4 } from 'uuid';
+
 import { createSSEStream } from './sse';
 
 import type { AgentBus, InvokeResult } from '../types';
 import type { SendRequest } from './types';
+
+const generateCallId = (): string => {
+  return uuidv4().replace(/-/g, '');
+};
 
 const unwrapInvokeResult = (result: InvokeResult<string, string>): string => {
   if (result.type === 'success') {
@@ -32,12 +38,14 @@ const validateSendRequest = (body: unknown): SendRequest => {
 };
 
 const sendToExistingTask = async (
+  callId: string,
   bus: AgentBus,
   taskId: string,
   message: string
 ): Promise<{ success: boolean; taskId: string; error?: string }> => {
   const result = unwrapInvokeResult(await bus.invoke(
     'task:send',
+    callId,
     'shell',
     JSON.stringify({
       receiverId: taskId,
@@ -53,9 +61,10 @@ const sendToExistingTask = async (
   return { success: true, taskId };
 };
 
-const createNewTask = async (bus: AgentBus, message: string): Promise<string> => {
+const createNewTask = async (callId: string, bus: AgentBus, message: string): Promise<string> => {
   const result = unwrapInvokeResult(await bus.invoke(
     'task:spawn',
+    callId,
     'shell',
     JSON.stringify({
       goal: message,
@@ -71,11 +80,12 @@ export const createRoutes = (bus: AgentBus) => {
     try {
       const body = await req.json();
       const { message, taskId } = validateSendRequest(body);
+      const callId = generateCallId();
 
       let targetTaskId: string;
 
       if (taskId) {
-        const result = await sendToExistingTask(bus, taskId, message);
+        const result = await sendToExistingTask(callId, bus, taskId, message);
         if (!result.success) {
           return Response.json(
             { error: { code: 'SEND_FAILED', message: result.error } },
@@ -84,7 +94,7 @@ export const createRoutes = (bus: AgentBus) => {
         }
         targetTaskId = result.taskId;
       } else {
-        targetTaskId = await createNewTask(bus, message);
+        targetTaskId = await createNewTask(callId, bus, message);
       }
 
       return Response.json({

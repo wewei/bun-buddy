@@ -68,6 +68,7 @@ export type InvokeResult<R, E> =
 
 // Generic handler: receives parsed input of type TInput, returns TOutput
 export type AbilityHandler<TInput = unknown, TOutput = unknown> = (
+  callId: string,
   taskId: string,
   input: TInput
 ) => Promise<AbilityResult<TOutput, string>>;
@@ -75,13 +76,13 @@ export type AbilityHandler<TInput = unknown, TOutput = unknown> = (
 // Internal handler: used by Bus internally, deals with strings
 // Can return invalid-input for parse errors
 export type InternalAbilityHandler = (
+  callId: string,
   taskId: string,
   input: string
 ) => Promise<InvokeResult<string, string>>;
 
 // Generic meta: carries type information via schemas
 export type AbilityMeta<TInput = unknown, TOutput = unknown> = {
-  id: string; // e.g., 'task:spawn'
   moduleName: string; // e.g., 'task'
   abilityName: string; // e.g., 'spawn'
   description: string;
@@ -91,6 +92,7 @@ export type AbilityMeta<TInput = unknown, TOutput = unknown> = {
 };
 
 export type RegisteredAbility = {
+  abilityId: string; // e.g., 'task:spawn'
   meta: AbilityMeta<unknown, unknown>;
   handler: InternalAbilityHandler;
 };
@@ -100,8 +102,9 @@ export type RegisteredAbility = {
 // ============================================================================
 
 export type AgentBus = {
-  invoke: (abilityId: string, callerId: string, input: string) => Promise<InvokeResult<string, string>>;
+  invoke: (abilityId: string, callId: string, callerId: string, input: string) => Promise<InvokeResult<string, string>>;
   register: <TInput, TOutput>(
+    abilityId: string,
     meta: AbilityMeta<TInput, TOutput>,
     handler: AbilityHandler<TInput, TOutput>
   ) => void;

@@ -67,7 +67,6 @@ type ModelListEmbedOutput = z.infer<typeof MODEL_LIST_EMBED_OUTPUT_SCHEMA>;
 
 // Meta definitions
 const MODEL_LLM_META: AbilityMeta<ModelLLMInput, ModelLLMOutput> = {
-  id: 'model:llm',
   moduleName: 'model',
   abilityName: 'llm',
   description: 'Invoke LLM for chat completion',
@@ -76,7 +75,6 @@ const MODEL_LLM_META: AbilityMeta<ModelLLMInput, ModelLLMOutput> = {
 };
 
 const MODEL_LIST_LLM_META: AbilityMeta<ModelListLLMInput, ModelListLLMOutput> = {
-  id: 'model:listLLM',
   moduleName: 'model',
   abilityName: 'listLLM',
   description: 'List all LLM providers and available models',
@@ -85,7 +83,6 @@ const MODEL_LIST_LLM_META: AbilityMeta<ModelListLLMInput, ModelListLLMOutput> = 
 };
 
 const MODEL_LIST_EMBED_META: AbilityMeta<ModelListEmbedInput, ModelListEmbedOutput> = {
-  id: 'model:listEmbed',
   moduleName: 'model',
   abilityName: 'listEmbed',
   description: 'List all embedding providers and available models',
@@ -122,6 +119,7 @@ const validateProviderAndModel = (
 };
 
 const handleStreamCompletion = async (
+  callId: string,
   taskId: string,
   adapter: ProviderAdapter,
   config: ProviderConfig,
@@ -141,6 +139,7 @@ const handleStreamCompletion = async (
       fullContent += chunk.content;
       await bus.invoke(
         'shell:send',
+        callId,
         taskId,
         JSON.stringify({
           content: chunk.content,
@@ -165,6 +164,7 @@ const handleStreamCompletion = async (
 };
 
 const handleLLMInvoke = async (
+  callId: string,
   taskId: string,
   input: ModelLLMInput,
   registry: ProviderRegistry,
@@ -186,7 +186,7 @@ const handleLLMInvoke = async (
   };
 
   if (input.streamToUser) {
-    const result = await handleStreamCompletion(taskId, adapter, config, input.model, input.messages, options, bus);
+    const result = await handleStreamCompletion(callId, taskId, adapter, config, input.model, input.messages, options, bus);
     return { type: 'success', result: JSON.parse(result) };
   } else {
     const result = await adapter.completeNonStream(config, input.model, input.messages, options);
@@ -199,12 +199,13 @@ const registerLLMAbility = (
   adapters: Map<string, ProviderAdapter>,
   bus: AgentBus
 ): void => {
-  bus.register(MODEL_LLM_META, async (taskId, input) =>
-    handleLLMInvoke(taskId, input, registry, adapters, bus)
+  bus.register('model:llm', MODEL_LLM_META, async (callId, taskId, input) =>
+    handleLLMInvoke(callId, taskId, input, registry, adapters, bus)
   );
 };
 
 const handleListLLMInvoke = async (
+  _callId: string,
   _taskId: string,
   _input: ModelListLLMInput,
   registry: ProviderRegistry
@@ -225,12 +226,13 @@ const handleListLLMInvoke = async (
 };
 
 const registerListLLMAbility = (registry: ProviderRegistry, bus: AgentBus): void => {
-  bus.register(MODEL_LIST_LLM_META, async (taskId, input) =>
-    handleListLLMInvoke(taskId, input, registry)
+  bus.register('model:listLLM', MODEL_LIST_LLM_META, async (callId, taskId, input) =>
+    handleListLLMInvoke(callId, taskId, input, registry)
   );
 };
 
 const handleListEmbedInvoke = async (
+  _callId: string,
   _taskId: string,
   _input: ModelListEmbedInput,
   registry: ProviderRegistry
@@ -251,8 +253,8 @@ const handleListEmbedInvoke = async (
 };
 
 const registerListEmbedAbility = (registry: ProviderRegistry, bus: AgentBus): void => {
-  bus.register(MODEL_LIST_EMBED_META, async (taskId, input) =>
-    handleListEmbedInvoke(taskId, input, registry)
+  bus.register('model:listEmbed', MODEL_LIST_EMBED_META, async (callId, taskId, input) =>
+    handleListEmbedInvoke(callId, taskId, input, registry)
   );
 };
 

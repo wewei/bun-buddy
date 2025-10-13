@@ -1,5 +1,7 @@
 // Task Execution Loop
 
+import { v4 as uuidv4 } from 'uuid';
+
 import type { AgentBus, Message, InvokeResult } from '../types';
 import type { TaskRegistry, TaskState } from './types';
 import type { ChatMessage, ToolCall } from '../model/types';
@@ -15,6 +17,10 @@ type ToolDefinition = {
 
 const generateMessageId = (): string => {
   return `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+};
+
+const generateCallId = (): string => {
+  return uuidv4().replace(/-/g, '');
 };
 
 const unwrapInvokeResult = (result: InvokeResult<string, string>): string => {
@@ -33,6 +39,7 @@ const convertToLLMMessages = (messages: Message[]): ChatMessage[] => {
 };
 
 const streamContentToUser = async (
+  callId: string,
   taskId: string,
   content: string,
   bus: AgentBus
@@ -44,6 +51,7 @@ const streamContentToUser = async (
     // Send empty message
     await bus.invoke(
       'shell:send',
+      callId,
       taskId,
       JSON.stringify({
         content: '',
@@ -65,6 +73,7 @@ const streamContentToUser = async (
     const isLast = i === chunks.length - 1;
     await bus.invoke(
       'shell:send',
+      callId,
       taskId,
       JSON.stringify({
         content: chunks[i],
@@ -75,9 +84,9 @@ const streamContentToUser = async (
   }
 };
 
-const generateToolsFromBus = async (bus: AgentBus, taskId: string): Promise<ToolDefinition[]> => {
+const generateToolsFromBus = async (callId: string, bus: AgentBus, taskId: string): Promise<ToolDefinition[]> => {
   // Get all modules
-  const modulesResult = unwrapInvokeResult(await bus.invoke('bus:list', taskId, '{}'));
+  const modulesResult = unwrapInvokeResult(await bus.invoke('bus:list', callId, taskId, '{}'));
   const { modules } = JSON.parse(modulesResult);
 
   const tools: ToolDefinition[] = [];
@@ -90,6 +99,7 @@ const generateToolsFromBus = async (bus: AgentBus, taskId: string): Promise<Tool
 
     const abilitiesResult = unwrapInvokeResult(await bus.invoke(
       'bus:abilities',
+      callId,
       taskId,
       JSON.stringify({ moduleName: module.name })
     ));
@@ -98,6 +108,7 @@ const generateToolsFromBus = async (bus: AgentBus, taskId: string): Promise<Tool
     for (const ability of abilities) {
       const schemaResult = unwrapInvokeResult(await bus.invoke(
         'bus:schema',
+        callId,
         taskId,
         JSON.stringify({ abilityId: ability.id })
       ));
@@ -118,6 +129,7 @@ const generateToolsFromBus = async (bus: AgentBus, taskId: string): Promise<Tool
 };
 
 const executeToolCall = async (
+  callId: string,
   taskId: string,
   toolCall: ToolCall,
   messages: Message[],
@@ -129,7 +141,7 @@ const executeToolCall = async (
   console.log(`Task ${taskId} - Executing tool: ${abilityId}`);
 
   try {
-    const toolResult = unwrapInvokeResult(await bus.invoke(abilityId, taskId, args));
+    const toolResult = unwrapInvokeResult(await bus.invoke(abilityId, callId, taskId, args));
     console.log(`Task ${taskId} - Tool result: ${toolResult.substring(0, 100)}...`);
 
     const toolMessage: Message = {
@@ -140,7 +152,7 @@ const executeToolCall = async (
       timestamp: Date.now(),
     };
 
-    unwrapInvokeResult(await bus.invoke('ldg:msg:save', 'system', JSON.stringify({ message: toolMessage })));
+    unwrapInvokeResult(await bus.invoke('ldg:msg:save', callId, 'system', JSON.stringify({ message: toolMessage })));
     messages.push(toolMessage);
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -154,12 +166,13 @@ const executeToolCall = async (
       timestamp: Date.now(),
     };
 
-    unwrapInvokeResult(await bus.invoke('ldg:msg:save', 'system', JSON.stringify({ message: errorMsg })));
+    unwrapInvokeResult(await bus.invoke('ldg:msg:save', callId, 'system', JSON.stringify({ message: errorMsg })));
     messages.push(errorMsg);
   }
 };
 
 const processLLMResponse = async (
+  callId: string,
   taskId: string,
   llmResult: string,
   messages: Message[],
@@ -174,7 +187,7 @@ const processLLMResponse = async (
   });
 
   if (content && content.length > 0) {
-    await streamContentToUser(taskId, content, bus);
+    await streamContentToUser(callId, taskId, content, bus);
   }
 
   const assistantMessage: Message = {
@@ -185,12 +198,12 @@ const processLLMResponse = async (
     timestamp: Date.now(),
   };
 
-  unwrapInvokeResult(await bus.invoke('ldg:msg:save', 'system', JSON.stringify({ message: assistantMessage })));
+  unwrapInvokeResult(await bus.invoke('ldg:msg:save', callId, 'system', JSON.stringify({ message: assistantMessage })));
   messages.push(assistantMessage);
 
   if (toolCalls && toolCalls.length > 0) {
     for (const toolCall of toolCalls as ToolCall[]) {
-      await executeToolCall(taskId, toolCall, messages, bus);
+      await executeToolCall(callId, taskId, toolCall, messages, bus);
     }
     return true; // Continue loop
   }
@@ -198,14 +211,15 @@ const processLLMResponse = async (
   return false; // Task complete
 };
 
-const completeTask = async (taskId: string, taskState: TaskState, bus: AgentBus): Promise<void> => {
+const completeTask = async (callId: string, taskId: string, taskState: TaskState, bus: AgentBus): Promise<void> => {
   taskState.task.completionStatus = 'success';
   taskState.task.updatedAt = Date.now();
-  unwrapInvokeResult(await bus.invoke('ldg:task:save', 'system', JSON.stringify({ task: taskState.task })));
+  unwrapInvokeResult(await bus.invoke('ldg:task:save', callId, 'system', JSON.stringify({ task: taskState.task })));
   console.log(`Task ${taskId} completed successfully`);
 };
 
 const failTask = async (
+  callId: string,
   taskId: string,
   taskState: TaskState,
   error: unknown,
@@ -217,15 +231,16 @@ const failTask = async (
   taskState.task.completionStatus = `failed: ${errorMessage}`;
   taskState.task.updatedAt = Date.now();
 
-  unwrapInvokeResult(await bus.invoke('ldg:task:save', 'system', JSON.stringify({ task: taskState.task })));
-  await streamContentToUser(taskId, `Error: ${errorMessage}`, bus);
+  unwrapInvokeResult(await bus.invoke('ldg:task:save', callId, 'system', JSON.stringify({ task: taskState.task })));
+  await streamContentToUser(callId, taskId, `Error: ${errorMessage}`, bus);
 };
 
 const getDefaultLLMProvider = async (
+  callId: string,
   bus: AgentBus,
   taskId: string
 ): Promise<{ provider: string; model: string }> => {
-  const result = unwrapInvokeResult(await bus.invoke('model:listLLM', taskId, '{}'));
+  const result = unwrapInvokeResult(await bus.invoke('model:listLLM', callId, taskId, '{}'));
   const { providers } = JSON.parse(result) as {
     providers: Array<{ providerName: string; models: string[] }>;
   };
@@ -251,13 +266,14 @@ const getDefaultLLMProvider = async (
 };
 
 const runExecutionLoop = async (
+  callId: string,
   taskId: string,
   messages: Message[],
   tools: ToolDefinition[],
   bus: AgentBus
 ): Promise<void> => {
   // Get default LLM provider and model
-  const { provider, model } = await getDefaultLLMProvider(bus, taskId);
+  const { provider, model } = await getDefaultLLMProvider(callId, bus, taskId);
 
   let continueLoop = true;
 
@@ -270,8 +286,8 @@ const runExecutionLoop = async (
       tools,
     };
 
-    const llmResult = unwrapInvokeResult(await bus.invoke('model:llm', taskId, JSON.stringify(llmInput)));
-    continueLoop = await processLLMResponse(taskId, llmResult, messages, bus);
+    const llmResult = unwrapInvokeResult(await bus.invoke('model:llm', callId, taskId, JSON.stringify(llmInput)));
+    continueLoop = await processLLMResponse(callId, taskId, llmResult, messages, bus);
   }
 };
 
@@ -287,17 +303,18 @@ export const createExecuteTask = (registry: TaskRegistry, bus: AgentBus) => {
     }
 
     taskState.isRunning = true;
+    const callId = generateCallId();
 
     try {
       const messages = taskState.messages;
-      const tools = await generateToolsFromBus(bus, taskId);
+      const tools = await generateToolsFromBus(callId, bus, taskId);
 
-      await runExecutionLoop(taskId, messages, tools, bus);
+      await runExecutionLoop(callId, taskId, messages, tools, bus);
       taskState.messages = messages;
 
-      await completeTask(taskId, taskState, bus);
+      await completeTask(callId, taskId, taskState, bus);
     } catch (error) {
-      await failTask(taskId, taskState, error, bus);
+      await failTask(callId, taskId, taskState, error, bus);
     } finally {
       taskState.isRunning = false;
     }

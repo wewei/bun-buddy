@@ -62,7 +62,6 @@ type TaskActiveOutput = z.infer<typeof TASK_ACTIVE_OUTPUT_SCHEMA>;
 
 // Meta definitions
 const TASK_SPAWN_META: AbilityMeta<TaskSpawnInput, TaskSpawnOutput> = {
-  id: 'task:spawn',
   moduleName: 'task',
   abilityName: 'spawn',
   description: 'Create a new task',
@@ -71,7 +70,6 @@ const TASK_SPAWN_META: AbilityMeta<TaskSpawnInput, TaskSpawnOutput> = {
 };
 
 const TASK_SEND_META: AbilityMeta<TaskSendInput, TaskSendOutput> = {
-  id: 'task:send',
   moduleName: 'task',
   abilityName: 'send',
   description: 'Send a message to a task (inter-task communication)',
@@ -80,7 +78,6 @@ const TASK_SEND_META: AbilityMeta<TaskSendInput, TaskSendOutput> = {
 };
 
 const TASK_CANCEL_META: AbilityMeta<TaskCancelInput, TaskCancelOutput> = {
-  id: 'task:cancel',
   moduleName: 'task',
   abilityName: 'cancel',
   description: 'Cancel a running task',
@@ -89,7 +86,6 @@ const TASK_CANCEL_META: AbilityMeta<TaskCancelInput, TaskCancelOutput> = {
 };
 
 const TASK_ACTIVE_META: AbilityMeta<TaskActiveInput, TaskActiveOutput> = {
-  id: 'task:active',
   moduleName: 'task',
   abilityName: 'active',
   description: 'List all active (in-progress) tasks',
@@ -158,13 +154,14 @@ const unwrapInvokeResult = <R, E>(
 
 const saveTaskAndMessages = async (
   bus: AgentBus,
+  callId: string,
   task: Task,
   messages: Message[]
 ): Promise<void> => {
-  unwrapInvokeResult(await bus.invoke('ldg:task:save', 'system', JSON.stringify({ task })));
+  unwrapInvokeResult(await bus.invoke('ldg:task:save', callId, 'system', JSON.stringify({ task })));
 
   for (const message of messages) {
-    unwrapInvokeResult(await bus.invoke('ldg:msg:save', 'system', JSON.stringify({ message })));
+    unwrapInvokeResult(await bus.invoke('ldg:msg:save', callId, 'system', JSON.stringify({ message })));
   }
 };
 
@@ -173,12 +170,12 @@ const registerSpawnAbility = (
   bus: AgentBus,
   executeTask: (taskId: string) => Promise<void>
 ): void => {
-  bus.register(TASK_SPAWN_META, async (_taskId, input: TaskSpawnInput) => {
+  bus.register('task:spawn', TASK_SPAWN_META, async (callId, _taskId, input: TaskSpawnInput) => {
     const taskId = generateId();
     const task = createTask(taskId, input.goal, input.parentTaskId, input.systemPrompt);
     const messages = createInitialMessages(taskId, task, input.goal);
 
-    await saveTaskAndMessages(bus, task, messages);
+    await saveTaskAndMessages(bus, callId, task, messages);
 
     registry.set(taskId, {
       task,
@@ -201,7 +198,7 @@ const registerSendAbility = (
   bus: AgentBus,
   executeTask: (taskId: string) => Promise<void>
 ): void => {
-  bus.register(TASK_SEND_META, async (_taskId, input: TaskSendInput) => {
+  bus.register('task:send', TASK_SEND_META, async (callId, _taskId, input: TaskSendInput) => {
     const taskState = registry.get(input.receiverId);
     if (!taskState) {
       return {
@@ -231,7 +228,7 @@ const registerSendAbility = (
       timestamp: Date.now(),
     };
 
-    unwrapInvokeResult(await bus.invoke('ldg:msg:save', 'system', JSON.stringify({ message: userMessage })));
+    unwrapInvokeResult(await bus.invoke('ldg:msg:save', callId, 'system', JSON.stringify({ message: userMessage })));
 
     taskState.messages.push(userMessage);
     taskState.lastActivityTime = Date.now();
@@ -247,7 +244,7 @@ const registerSendAbility = (
 };
 
 const registerCancelAbility = (registry: TaskRegistry, bus: AgentBus): void => {
-  bus.register(TASK_CANCEL_META, async (_taskId, input: TaskCancelInput) => {
+  bus.register('task:cancel', TASK_CANCEL_META, async (callId, _taskId, input: TaskCancelInput) => {
     const taskState = registry.get(input.taskId);
     if (!taskState) {
       return {
@@ -259,7 +256,7 @@ const registerCancelAbility = (registry: TaskRegistry, bus: AgentBus): void => {
     taskState.task.completionStatus = 'cancelled';
     taskState.task.updatedAt = Date.now();
 
-    unwrapInvokeResult(await bus.invoke('ldg:task:save', 'system', JSON.stringify({ task: taskState.task })));
+    unwrapInvokeResult(await bus.invoke('ldg:task:save', callId, 'system', JSON.stringify({ task: taskState.task })));
 
     console.log(`Task ${input.taskId} cancelled: ${input.reason}`);
 
@@ -268,7 +265,7 @@ const registerCancelAbility = (registry: TaskRegistry, bus: AgentBus): void => {
 };
 
 const registerActiveAbility = (registry: TaskRegistry, bus: AgentBus): void => {
-  bus.register(TASK_ACTIVE_META, async (_taskId, input: TaskActiveInput) => {
+  bus.register('task:active', TASK_ACTIVE_META, async (_callId, _taskId, input: TaskActiveInput) => {
     const activeTasks = Array.from(registry.values())
       .filter((state) => state.task.completionStatus === undefined)
       .slice(0, input.limit || 100)
